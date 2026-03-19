@@ -20,10 +20,12 @@ def extract_text_from_file(uploaded_file):
     return ""
 
 def analyze_product(product_input):
-    system_prompt = """You are a senior product manager and market analyst.
-When given a product concept, analyze it across 5 dimensions.
-Always return ONLY valid JSON, no explanation outside the JSON.
-Use this exact structure:
+    system_prompt = """You are a senior product manager and market analyst with 15+ years of experience evaluating early-stage products.
+You are critical and rigorous. Most products have significant weaknesses — reflect this honestly in your scores.
+A score above 80/100 should be rare and only for truly exceptional concepts.
+
+Return ONLY valid JSON using this exact structure:
+
 {
   "market": {
     "tam": "e.g. $15B",
@@ -49,17 +51,58 @@ Use this exact structure:
     "cost_structure": "...",
     "revenue_streams": "..."
   },
+  "scoring": {
+    "product_market_fit": {
+      "score": 0,
+      "max": 30,
+      "rationale": "...",
+      "risks": ["...", "..."]
+    },
+    "market_size_growth": {
+      "score": 0,
+      "max": 25,
+      "rationale": "...",
+      "risks": ["...", "..."]
+    },
+    "competitive_differentiation": {
+      "score": 0,
+      "max": 20,
+      "rationale": "...",
+      "risks": ["...", "..."]
+    },
+    "business_model_viability": {
+      "score": 0,
+      "max": 15,
+      "rationale": "...",
+      "risks": ["...", "..."]
+    },
+    "go_to_market_feasibility": {
+      "score": 0,
+      "max": 10,
+      "rationale": "...",
+      "risks": ["...", "..."]
+    }
+  },
   "go_no_go": {
-    "score": 7,
+    "total_score": 0,
     "verdict": "GO / CONDITIONAL GO / NO-GO",
-    "reasons": ["...", "...", "..."]
+    "summary": "...",
+    "top_risks": ["...", "...", "..."],
+    "recommendations": ["...", "...", "..."]
   }
 }
-Important: score must be an integer between 1 and 10."""
+
+Scoring guide:
+- product_market_fit: max 30. Below 18 = weak PMF.
+- market_size_growth: max 25. Below 15 = too small or shrinking.
+- competitive_differentiation: max 20. Below 12 = not differentiated enough.
+- business_model_viability: max 15. Below 8 = unclear path to revenue.
+- go_to_market_feasibility: max 10. Below 5 = hard to reach users.
+- Total verdict: GO = 75+, CONDITIONAL GO = 50-74, NO-GO = below 50."""
 
     response = client.chat.completions.create(
         model="deepseek-chat",
-        max_tokens=2000,
+        max_tokens=3000,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": "Analyze this product concept and return JSON only:\n\n" + product_input}
@@ -82,14 +125,29 @@ st.set_page_config(page_title="PM Product Analyzer", page_icon="📊", layout="w
 st.title("📊 PM Product Analyzer")
 st.caption("Enter a product concept to generate market research, competitor analysis, and a Go/No-go recommendation.")
 
+with st.expander("📋 Suggested input format"):
+    st.markdown("""
+Fill in as many fields as possible for a more accurate analysis:
+
+```
+Product name: [name]
+Target users: [who are they, age range, role]
+Core problem: [what pain point are you solving]
+Solution: [how your product solves it]
+Market: [which market/industry]
+Monetization: [how you plan to make money]
+Stage: [idea / MVP / prototype]
+```
+""")
+
 st.subheader("Enter Product Information")
 col1, col2 = st.columns(2)
 
 with col1:
     text_input = st.text_area(
         "Text Description",
-        placeholder="Example: An AI tool that helps PMs quickly conduct competitor analysis. Target users are PMs at tech companies who spend too much time gathering market data.",
-        height=200
+        placeholder="Product name: ...\nTarget users: ...\nCore problem: ...\nSolution: ...\nMarket: ...\nMonetization: ...",
+        height=220
     )
 
 with col2:
@@ -122,41 +180,23 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
             tam = m.get("tam", "N/A")
             sam = m.get("sam", "N/A")
             som = m.get("som", "N/A")
-
             st.markdown("### Market Size Overview")
-
             col_tam, col_sam, col_som = st.columns(3)
             with col_tam:
-                st.markdown(
-                    f"""
-                    <div style="background:#1a6eb5;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">TAM</div>
-                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Total Addressable Market</div>
-                        <div style="font-size:28px;font-weight:700;">{tam}</div>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
+                st.markdown(f"""<div style="background:#1a6eb5;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">TAM</div>
+<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Total Addressable Market</div>
+<div style="font-size:28px;font-weight:700;">{tam}</div></div>""", unsafe_allow_html=True)
             with col_sam:
-                st.markdown(
-                    f"""
-                    <div style="background:#1d9e75;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SAM</div>
-                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Addressable Market</div>
-                        <div style="font-size:28px;font-weight:700;">{sam}</div>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
+                st.markdown(f"""<div style="background:#1d9e75;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SAM</div>
+<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Addressable Market</div>
+<div style="font-size:28px;font-weight:700;">{sam}</div></div>""", unsafe_allow_html=True)
             with col_som:
-                st.markdown(
-                    f"""
-                    <div style="background:#3b8bd4;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SOM</div>
-                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Obtainable Market</div>
-                        <div style="font-size:28px;font-weight:700;">{som}</div>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
-
+                st.markdown(f"""<div style="background:#3b8bd4;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SOM</div>
+<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Obtainable Market</div>
+<div style="font-size:28px;font-weight:700;">{som}</div></div>""", unsafe_allow_html=True)
             st.markdown("### Key Market Trends")
             for t in m.get("trends", []):
                 st.write(f"- {t}")
@@ -184,55 +224,96 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
             b = result.get("business_model", {})
             st.markdown("### Business Model Canvas")
 
-            def cell(label, key, bg="var(--color-background-primary)"):
+            cell_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#fff;height:100%;box-sizing:border-box;"
+            label_style = "font-size:11px;font-weight:600;color:#666;margin-bottom:6px;"
+            val_style = "font-size:12px;color:#222;line-height:1.5;overflow-wrap:break-word;word-break:break-word;"
+            bot_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#f8f8f8;box-sizing:border-box;"
+
+            def c(icon, label, key, style=cell_style):
                 val = b.get(key, "—")
-                return f"""<div style="background:{bg};border:0.5px solid var(--color-border-secondary);border-radius:8px;padding:10px;height:100%;">
-<div style="font-size:11px;font-weight:500;color:var(--color-text-secondary);margin-bottom:5px;">{label}</div>
-<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5;overflow-wrap:break-word;">{val}</div>
-</div>"""
+                return f'<div style="{style}"><div style="{label_style}">{icon} {label}</div><div style="{val_style}">{val}</div></div>'
 
             st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-bottom:6px;">
-  <div style="grid-row:1/3;">{cell("🔗 Key Partners","key_partners")}</div>
-  <div>{cell("✅ Key Activities","key_activities")}</div>
-  <div style="grid-row:1/3;">{cell("🎁 Value Propositions","value_propositions")}</div>
-  <div>{cell("❤️ Customer Relationships","customer_relationships")}</div>
-  <div style="grid-row:1/3;">{cell("👥 Customer Segments","customer_segments")}</div>
-  <div>{cell("🏗️ Key Resources","key_resources")}</div>
-  <div>{cell("🚚 Channels","channels")}</div>
-</div>
-<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
-  {cell("🏷️ Cost Structure","cost_structure","var(--color-background-secondary)")}
-  {cell("💵 Revenue Streams","revenue_streams","var(--color-background-secondary)")}
-</div>
+<table style="width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;">
+<tr>
+  <td rowspan="2" style="width:20%;vertical-align:top;">{c("🔗","Key Partners","key_partners")}</td>
+  <td style="width:20%;vertical-align:top;">{c("✅","Key Activities","key_activities")}</td>
+  <td rowspan="2" style="width:20%;vertical-align:top;">{c("🎁","Value Propositions","value_propositions")}</td>
+  <td style="width:20%;vertical-align:top;">{c("❤️","Customer Relationships","customer_relationships")}</td>
+  <td rowspan="2" style="width:20%;vertical-align:top;">{c("👥","Customer Segments","customer_segments")}</td>
+</tr>
+<tr>
+  <td style="vertical-align:top;">{c("🏗️","Key Resources","key_resources")}</td>
+  <td style="vertical-align:top;">{c("🚚","Channels","channels")}</td>
+</tr>
+<tr>
+  <td colspan="2" style="vertical-align:top;">{c("🏷️","Cost Structure","cost_structure", bot_style)}</td>
+  <td></td>
+  <td colspan="2" style="vertical-align:top;">{c("💵","Revenue Streams","revenue_streams", bot_style)}</td>
+</tr>
+</table>
 """, unsafe_allow_html=True)
 
         with tab5:
             g = result.get("go_no_go", {})
-            score = g.get("score", 0)
+            scoring = result.get("scoring", {})
+            total = g.get("total_score", 0)
             try:
-                score = int(score)
+                total = int(total)
             except Exception:
-                score = 0
+                total = 0
             verdict = g.get("verdict", "")
 
             if "NO-GO" in verdict:
-                st.error(f"## {verdict}    Score: {score} / 10")
+                st.error(f"## {verdict}　　Total Score: {total} / 100")
             elif "CONDITIONAL" in verdict:
-                st.warning(f"## {verdict}    Score: {score} / 10")
+                st.warning(f"## {verdict}　　Total Score: {total} / 100")
             else:
-                st.success(f"## {verdict}    Score: {score} / 10")
+                st.success(f"## {verdict}　　Total Score: {total} / 100")
 
-            st.progress(score / 10)
+            st.progress(total / 100)
+            st.markdown("---")
 
-            st.write("**Key Reasons:**")
-            for r in g.get("reasons", []):
-                st.write(f"- {r}")
+            st.markdown("### Scoring Breakdown")
 
-        st.divider()
-        st.download_button(
-            label="Download Full Report (JSON)",
-            data=json.dumps(result, ensure_ascii=False, indent=2),
-            file_name="pm_analysis_report.json",
-            mime="application/json"
-        )
+            dimensions = [
+                ("Product-market fit", "product_market_fit", 30),
+                ("Market size & growth", "market_size_growth", 25),
+                ("Competitive differentiation", "competitive_differentiation", 20),
+                ("Business model viability", "business_model_viability", 15),
+                ("Go-to-market feasibility", "go_to_market_feasibility", 10),
+            ]
+
+            for label, key, max_score in dimensions:
+                dim = scoring.get(key, {})
+                score = dim.get("score", 0)
+                try:
+                    score = int(score)
+                except Exception:
+                    score = 0
+                rationale = dim.get("rationale", "")
+                risks = dim.get("risks", [])
+                pct = score / max_score
+
+                if pct >= 0.75:
+                    color = "#1d9e75"
+                elif pct >= 0.5:
+                    color = "#f0a500"
+                else:
+                    color = "#e03c3c"
+
+                with st.expander(f"{label}　　{score} / {max_score}"):
+                    st.markdown(f"""<div style="background:#f5f5f5;border-radius:8px;padding:2px 8px;margin-bottom:10px;">
+<div style="background:{color};height:8px;border-radius:6px;width:{int(pct*100)}%;"></div></div>""", unsafe_allow_html=True)
+                    st.write(f"**Rationale:** {rationale}")
+                    if risks:
+                        st.write("**Risks:**")
+                        for r in risks:
+                            st.write(f"- {r}")
+
+            st.markdown("---")
+            st.markdown("### Overall Assessment")
+            st.write(g.get("summary", ""))
+
+            st.markdown("**Top Risks:**")
+            for r in g.get("top_risks", []):
