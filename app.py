@@ -146,7 +146,6 @@ col1, col2 = st.columns(2)
 with col1:
     text_input = st.text_area(
         "Text Description",
-        value=st.session_state.get("text_input", ""),
         placeholder="Product name: ...\nTarget users: ...\nCore problem: ...\nSolution: ...\nMarket: ...\nMonetization: ...",
         height=220,
         key="text_input"
@@ -168,8 +167,7 @@ with col_btn1:
     analyze = st.button("Analyze Product", type="primary", disabled=not final_input.strip())
 with col_btn2:
     if st.button("Clear", type="secondary"):
-        if "text_input" in st.session_state:
-            del st.session_state["text_input"]
+        st.session_state["text_input"] = ""
         st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
         st.rerun()
 
