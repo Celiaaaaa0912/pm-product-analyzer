@@ -5,7 +5,10 @@ import json
 import PyPDF2
 import docx
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.environ.get("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com"
+)
 
 def extract_text_from_file(uploaded_file):
     if uploaded_file.name.endswith(".pdf"):
@@ -45,7 +48,7 @@ Use this exact structure:
 }"""
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="deepseek-chat",
         max_tokens=2000,
         messages=[
             {"role": "system", "content": system_prompt},
