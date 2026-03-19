@@ -48,7 +48,7 @@ Use this exact structure:
     user_prompt = "Analyze this product concept and return JSON only:\n\n" + product_input
 
     response = client.messages.create(
-        model="claude-haiku-20240307",
+        model="claude-3-haiku-20240307",
         max_tokens=2000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}]
