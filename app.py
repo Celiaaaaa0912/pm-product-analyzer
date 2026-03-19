@@ -162,14 +162,15 @@ if uploaded_file and "file_text" in dir():
     final_input += "\n\n" + file_text
 
 st.caption("Please wait a few seconds after the page loads before clicking Analyze.")
+def clear_inputs():
+    st.session_state["text_input"] = ""
+    st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
+
 col_btn1, col_btn2, col_rest = st.columns([1.5, 1, 6])
 with col_btn1:
     analyze = st.button("Analyze Product", type="primary", disabled=not final_input.strip())
 with col_btn2:
-    if st.button("Clear", type="secondary"):
-        st.session_state["text_input"] = ""
-        st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
-        st.rerun()
+    st.button("Clear", type="secondary", on_click=clear_inputs)
 
 if analyze:
     with st.spinner("Analyzing your product concept... this may take 20-40 seconds."):
