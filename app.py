@@ -4,10 +4,8 @@ import os
 import json
 import PyPDF2
 import docx
---- Config ---
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 client = anthropic.Anthropic(api_key=api_key)
---- Helper: extract text from uploaded file ---
 def extract_text_from_file(uploaded_file):
 if uploaded_file.name.endswith(".pdf"):
 reader = PyPDF2.PdfReader(uploaded_file)
@@ -16,8 +14,7 @@ elif uploaded_file.name.endswith(".docx"):
 doc = docx.Document(uploaded_file)
 return "\n".join(p.text for p in doc.paragraphs)
 return ""
---- Core: call Claude API ---
-def analyze_product(product_input: str) -> dict:
+def analyze_product(product_input):
 system_prompt = """You are a senior product manager and market analyst.
 When given a product concept, analyze it across 5 dimensions.
 Always return ONLY valid JSON, no explanation outside the JSON.
@@ -44,9 +41,8 @@ Use this exact structure:
 "reasons": ["...", "...", "..."]
 }
 }"""
-user_prompt = f"""Analyze this product concept:
-{product_input}
-Return your full analysis as JSON only."""
+user_prompt = "Analyze this product concept and return JSON only:\n\n" + product_input
+
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",
     max_tokens=2000,
@@ -65,7 +61,6 @@ try:
     return json.loads(clean.strip())
 except Exception:
     return {"error": result_text}
---- UI ---
 st.set_page_config(page_title="PM Product Analyzer", page_icon="📊", layout="wide")
 st.title("📊 PM Product Analyzer")
 st.caption("Enter a product concept to generate market research, competitor analysis, and a Go/No-go recommendation.")
@@ -83,10 +78,10 @@ if uploaded_file:
 file_text = extract_text_from_file(uploaded_file)
 st.success(f"File read successfully — {len(file_text)} characters extracted.")
 final_input = text_input or ""
-if uploaded_file and "file_text" in locals() and file_text:
+if uploaded_file and "file_text" in dir():
 final_input += "\n\n" + file_text
 if st.button("Analyze Product", type="primary", disabled=not final_input.strip()):
-with st.spinner("Analyzing your product concept... this may take 20–40 seconds."):
+with st.spinner("Analyzing your product concept... this may take 20-40 seconds."):
 result = analyze_product(final_input)
 if "error" in result:
     st.error("Parsing failed. Raw output:")
@@ -138,11 +133,11 @@ else:
         verdict = g.get("verdict", "")
 
         if "NO-GO" in verdict:
-            st.error(f"## {verdict}　　Score: {score} / 10")
+            st.error(f"## {verdict}    Score: {score} / 10")
         elif "CONDITIONAL" in verdict:
-            st.warning(f"## {verdict}　　Score: {score} / 10")
+            st.warning(f"## {verdict}    Score: {score} / 10")
         else:
-            st.success(f"## {verdict}　　Score: {score} / 10")
+            st.success(f"## {verdict}    Score: {score} / 10")
 
         st.write("**Key Reasons:**")
         for r in g.get("reasons", []):
