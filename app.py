@@ -146,8 +146,10 @@ col1, col2 = st.columns(2)
 with col1:
     text_input = st.text_area(
         "Text Description",
+        value=st.session_state.get("text_input", ""),
         placeholder="Product name: ...\nTarget users: ...\nCore problem: ...\nSolution: ...\nMarket: ...\nMonetization: ...",
-        height=220
+        height=220,
+        key="text_input"
     )
 
 with col2:
@@ -160,7 +162,15 @@ final_input = text_input or ""
 if uploaded_file and "file_text" in dir():
     final_input += "\n\n" + file_text
 
-if st.button("Analyze Product", type="primary", disabled=not final_input.strip()):
+col_btn1, col_btn2 = st.columns([1, 5])
+with col_btn1:
+    if st.button("Clear", type="secondary"):
+        st.session_state["text_input"] = ""
+        st.rerun()
+with col_btn2:
+    analyze = st.button("Analyze Product", type="primary", disabled=not final_input.strip())
+
+if analyze:
     with st.spinner("Analyzing your product concept... this may take 20-40 seconds."):
         result = analyze_product(final_input)
 
@@ -273,7 +283,6 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
 
             st.progress(total / 100)
             st.markdown("---")
-
             st.markdown("### Scoring Breakdown")
 
             dimensions = [
@@ -314,11 +323,9 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
             st.markdown("---")
             st.markdown("### Overall Assessment")
             st.write(g.get("summary", ""))
-
             st.markdown("**Top Risks:**")
             for r in g.get("top_risks", []):
                 st.write(f"- {r}")
-
             st.markdown("**Recommendations:**")
             for r in g.get("recommendations", []):
                 st.write(f"- {r}")
