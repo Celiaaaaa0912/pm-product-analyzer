@@ -26,26 +26,36 @@ Always return ONLY valid JSON, no explanation outside the JSON.
 Use this exact structure:
 {
   "market": {
-    "tam": "...",
-    "trends": ["...", "..."]
+    "tam": "e.g. $15B",
+    "sam": "e.g. $3B",
+    "som": "e.g. $300M",
+    "trends": ["...", "...", "..."]
   },
   "competitors": [
     {"name": "...", "strengths": "...", "weaknesses": "..."}
   ],
   "user_pain_points": {
-    "jtbd": ["...", "..."],
-    "frustrations": ["...", "..."]
+    "jtbd": ["...", "...", "..."],
+    "frustrations": ["...", "...", "..."]
   },
   "business_model": {
-    "revenue_model": "...",
-    "cost_risks": ["...", "..."]
+    "key_partners": "...",
+    "key_activities": "...",
+    "key_resources": "...",
+    "value_propositions": "...",
+    "customer_relationships": "...",
+    "channels": "...",
+    "customer_segments": "...",
+    "cost_structure": "...",
+    "revenue_streams": "..."
   },
   "go_no_go": {
-    "score": 0,
+    "score": 7,
     "verdict": "GO / CONDITIONAL GO / NO-GO",
     "reasons": ["...", "...", "..."]
   }
-}"""
+}
+Important: score must be an integer between 1 and 10."""
 
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -109,8 +119,45 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
 
         with tab1:
             m = result.get("market", {})
-            st.metric("Estimated TAM", m.get("tam", "N/A"))
-            st.write("**Key Market Trends:**")
+            tam = m.get("tam", "N/A")
+            sam = m.get("sam", "N/A")
+            som = m.get("som", "N/A")
+
+            st.markdown("### Market Size Overview")
+
+            col_tam, col_sam, col_som = st.columns(3)
+            with col_tam:
+                st.markdown(
+                    f"""
+                    <div style="background:#1a6eb5;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">TAM</div>
+                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Total Addressable Market</div>
+                        <div style="font-size:28px;font-weight:700;">{tam}</div>
+                    </div>
+                    """, unsafe_allow_html=True
+                )
+            with col_sam:
+                st.markdown(
+                    f"""
+                    <div style="background:#1d9e75;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SAM</div>
+                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Addressable Market</div>
+                        <div style="font-size:28px;font-weight:700;">{sam}</div>
+                    </div>
+                    """, unsafe_allow_html=True
+                )
+            with col_som:
+                st.markdown(
+                    f"""
+                    <div style="background:#3b8bd4;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
+                        <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SOM</div>
+                        <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Obtainable Market</div>
+                        <div style="font-size:28px;font-weight:700;">{som}</div>
+                    </div>
+                    """, unsafe_allow_html=True
+                )
+
+            st.markdown("### Key Market Trends")
             for t in m.get("trends", []):
                 st.write(f"- {t}")
 
@@ -135,14 +182,38 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
 
         with tab4:
             b = result.get("business_model", {})
-            st.info(f"**Recommended Revenue Model:** {b.get('revenue_model', '')}")
-            st.write("**Key Cost Drivers & Risks:**")
-            for r in b.get("cost_risks", []):
-                st.write(f"- {r}")
+            st.markdown("### Business Model Canvas")
+
+            def cell(label, key, bg="var(--color-background-primary)"):
+                val = b.get(key, "—")
+                return f"""<div style="background:{bg};border:0.5px solid var(--color-border-secondary);border-radius:8px;padding:10px;height:100%;">
+<div style="font-size:11px;font-weight:500;color:var(--color-text-secondary);margin-bottom:5px;">{label}</div>
+<div style="font-size:12px;color:var(--color-text-primary);line-height:1.5;overflow-wrap:break-word;">{val}</div>
+</div>"""
+
+            st.markdown(f"""
+<div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-bottom:6px;">
+  <div style="grid-row:1/3;">{cell("🔗 Key Partners","key_partners")}</div>
+  <div>{cell("✅ Key Activities","key_activities")}</div>
+  <div style="grid-row:1/3;">{cell("🎁 Value Propositions","value_propositions")}</div>
+  <div>{cell("❤️ Customer Relationships","customer_relationships")}</div>
+  <div style="grid-row:1/3;">{cell("👥 Customer Segments","customer_segments")}</div>
+  <div>{cell("🏗️ Key Resources","key_resources")}</div>
+  <div>{cell("🚚 Channels","channels")}</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
+  {cell("🏷️ Cost Structure","cost_structure","var(--color-background-secondary)")}
+  {cell("💵 Revenue Streams","revenue_streams","var(--color-background-secondary)")}
+</div>
+""", unsafe_allow_html=True)
 
         with tab5:
             g = result.get("go_no_go", {})
             score = g.get("score", 0)
+            try:
+                score = int(score)
+            except Exception:
+                score = 0
             verdict = g.get("verdict", "")
 
             if "NO-GO" in verdict:
@@ -151,6 +222,8 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
                 st.warning(f"## {verdict}    Score: {score} / 10")
             else:
                 st.success(f"## {verdict}    Score: {score} / 10")
+
+            st.progress(score / 10)
 
             st.write("**Key Reasons:**")
             for r in g.get("reasons", []):
