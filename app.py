@@ -55,11 +55,10 @@ Use this exact structure:
 Use web search to find real market data, competitor information, and trends.
 Return your full analysis as JSON only."""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-5",
+ response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
         max_tokens=2000,
         system=system_prompt,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": user_prompt}]
     )
 
