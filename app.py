@@ -1,12 +1,11 @@
 import streamlit as st
-import anthropic
+from openai import OpenAI
 import os
 import json
 import PyPDF2
 import docx
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-client = anthropic.Anthropic(api_key=api_key)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 def extract_text_from_file(uploaded_file):
     if uploaded_file.name.endswith(".pdf"):
@@ -45,16 +44,16 @@ Use this exact structure:
   }
 }"""
 
-    user_prompt = "Analyze this product concept and return JSON only:\n\n" + product_input
-
-    response = client.messages.create(
-        model="claude-3-haiku-20240307",
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
         max_tokens=2000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}]
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Analyze this product concept and return JSON only:\n\n" + product_input}
+        ]
     )
 
-    result_text = response.content[0].text
+    result_text = response.choices[0].message.content
 
     try:
         clean = result_text.strip()
