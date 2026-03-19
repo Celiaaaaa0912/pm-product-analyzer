@@ -153,7 +153,7 @@ with col1:
     )
 
 with col2:
-    uploaded_file = st.file_uploader("Or upload a PDF / DOCX", type=["pdf", "docx"])
+    uploaded_file = st.file_uploader("Or upload a PDF / DOCX", type=["pdf", "docx"], key=f"uploader_{st.session_state.get('uploader_key', 0)}")
     if uploaded_file:
         file_text = extract_text_from_file(uploaded_file)
         st.success(f"File read successfully — {len(file_text)} characters extracted.")
@@ -168,7 +168,9 @@ with col_btn1:
     analyze = st.button("Analyze Product", type="primary", disabled=not final_input.strip())
 with col_btn2:
     if st.button("Clear", type="secondary"):
-        st.session_state["text_input"] = ""
+        if "text_input" in st.session_state:
+            del st.session_state["text_input"]
+        st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
         st.rerun()
 
 if analyze:
