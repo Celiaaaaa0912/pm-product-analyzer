@@ -22,7 +22,7 @@ def extract_text_from_file(uploaded_file):
 def analyze_product(product_input):
     system_prompt = """You are a senior product manager and market analyst with 15+ years of experience evaluating early-stage products.
 You are critical and rigorous. Most products have significant weaknesses — reflect this honestly in your scores.
-A score above 80/100 should be rare and only for truly exceptional concepts.
+A score above 70/100 should be rare and only for truly exceptional concepts.
 
 Return ONLY valid JSON using this exact structure:
 
@@ -96,8 +96,8 @@ Scoring guide:
 - product_market_fit: max 30. Below 18 = weak PMF.
 - market_size_growth: max 25. Below 15 = too small or shrinking.
 - competitive_differentiation: max 20. Below 12 = not differentiated enough.
-- business_model_viability: max 15. Below 8 = unclear path to revenue.
-- go_to_market_feasibility: max 10. Below 5 = hard to reach users.
+- business_model_viability: max 15. Below 9 = unclear path to revenue.
+- go_to_market_feasibility: max 10. Below 6 = hard to reach users.
 - Total verdict: GO = 75+, CONDITIONAL GO = 50-74, NO-GO = below 50."""
 
     response = client.chat.completions.create(
@@ -317,3 +317,16 @@ if st.button("Analyze Product", type="primary", disabled=not final_input.strip()
 
             st.markdown("**Top Risks:**")
             for r in g.get("top_risks", []):
+                st.write(f"- {r}")
+
+            st.markdown("**Recommendations:**")
+            for r in g.get("recommendations", []):
+                st.write(f"- {r}")
+
+        st.divider()
+        st.download_button(
+            label="Download Full Report (JSON)",
+            data=json.dumps(result, ensure_ascii=False, indent=2),
+            file_name="pm_analysis_report.json",
+            mime="application/json"
+        )
