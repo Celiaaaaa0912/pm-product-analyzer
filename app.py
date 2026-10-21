@@ -373,7 +373,9 @@ CSS = """
 .pa-table b, .pa-text b {font-weight:650; color:#111827;}
 div[data-testid="stMarkdownContainer"] table {font-size:13px; width:100%;}
 div[data-testid="stMarkdownContainer"] th, div[data-testid="stMarkdownContainer"] td {white-space:normal; vertical-align:top;}
-div[data-testid="stMarkdownContainer"] td:first-child {white-space:nowrap;}
+div[data-testid="stMarkdownContainer"] table:not(.pa-table):not(.pa-bmc) td:first-child {white-space:nowrap;}
+.pa-bmc td {white-space:normal !important;}
+.pa-bmc div {overflow-wrap:break-word; word-break:normal;}
 </style>
 """
 
@@ -769,7 +771,7 @@ elif section == SECTIONS[5]:
                 f'<div style="{val_style}">{bullets(v) or "—"}</div></div>')
 
     show(f"""
-<table style="width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;">
+<table class="pa-bmc" style="width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;">
 <tr>
   <td rowspan="2" style="width:20%;vertical-align:top;">{cell("🔗","Key Partners","key_partners")}</td>
   <td style="width:20%;vertical-align:top;">{cell("✅","Key Activities","key_activities")}</td>
