@@ -1,341 +1,232 @@
+"""
+Product Analyzer v2 — Assumption Stress-Tester
+Deploy as a SEPARATE Streamlit app so v1 stays live.
+
+Secrets (Streamlit Cloud > App settings > Secrets):
+    DEEPSEEK_API_KEY = "sk-..."
+Streamlit Cloud exposes root-level secrets as environment variables, so os.environ works.
+"""
+
+import csv, datetime, io, json, os, re
 import streamlit as st
 from openai import OpenAI
-import os
-import json
-import PyPDF2
-import docx
 
-client = OpenAI(
-    api_key=os.environ.get("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
-)
+MODEL = "deepseek-chat"
+TEMPERATURE = 0.2  # low temperature = more consistent results
 
-def extract_text_from_file(uploaded_file):
-    if uploaded_file.name.endswith(".pdf"):
-        reader = PyPDF2.PdfReader(uploaded_file)
-        return "\n".join(page.extract_text() for page in reader.pages)
-    elif uploaded_file.name.endswith(".docx"):
-        doc = docx.Document(uploaded_file)
-        return "\n".join(p.text for p in doc.paragraphs)
-    return ""
+# ---------------------------------------------------------------- prompt
 
-def analyze_product(product_input):
-    system_prompt = """You are a senior product manager and market analyst with 15+ years of experience evaluating early-stage products.
-You are critical and rigorous. Most products have significant weaknesses — reflect this honestly in your scores.
-A score above 70/100 should be rare and only for truly exceptional concepts.
+SYSTEM_PROMPT = """You are a skeptical senior product manager reviewing an early-stage product idea.
+Your job is NOT to decide whether the idea is good. Your job is to find the assumptions the idea
+depends on, judge which are most likely to be wrong, and tell the founder the cheapest way to test them.
 
-Return ONLY valid JSON using this exact structure:
+Rules:
+- Be critical. Most early ideas rest on at least one unsupported assumption. Say so plainly.
+- You have no live market data. Never present a market size or statistic as fact. If you mention a
+  number, label its basis as "Assumption" or "Inference" and say what source would confirm it.
+- Label every claim's basis:
+    "Evidence"   = stated in the user's input or widely documented public knowledge
+    "Inference"  = reasoned from evidence, could be wrong
+    "Assumption" = no evidence; must be tested
+- Choose exactly 3 riskiest assumptions, ordered from most to least dangerous. "Dangerous" means:
+  if this is wrong, the idea fails, and there is little evidence for it yet.
+- Each test must be cheap (doable in under 2 weeks by 1-2 people) and have a clear pass signal.
+- Confidence is about how much is already known, not how exciting the idea is:
+    "Low" = key assumptions untested; "Medium" = some support; "High" = core assumptions supported.
+- The score (0-100) is a secondary reference only. Above 70 should be rare.
+{mode_rules}
 
-{
-  "market": {
-    "tam": "e.g. $15B",
-    "sam": "e.g. $3B",
-    "som": "e.g. $300M",
-    "trends": ["...", "...", "..."]
-  },
-  "competitors": [
-    {"name": "...", "strengths": "...", "weaknesses": "..."}
+Return ONLY valid json in exactly this shape:
+{{
+  "one_line_summary": "what the idea is, in plain words",
+  "assumed_target_user": "who you think this is for, as specifically as possible",
+  "confidence": "Low | Medium | High",
+  "confidence_reason": "one or two sentences",
+  "riskiest_assumptions": [
+    {{
+      "assumption": "the belief the idea depends on",
+      "why_risky": "what happens if it is wrong",
+      "basis": "Evidence | Inference | Assumption",
+      "cheapest_test": "a concrete test",
+      "test_type": "Interview | Survey | Landing page | Prototype | Desk research | Pilot",
+      "pass_signal": "what result would mean the assumption holds"
+    }}
   ],
-  "user_pain_points": {
-    "jtbd": ["...", "...", "..."],
-    "frustrations": ["...", "...", "..."]
-  },
-  "business_model": {
-    "key_partners": "...",
-    "key_activities": "...",
-    "key_resources": "...",
-    "value_propositions": "...",
-    "customer_relationships": "...",
-    "channels": "...",
-    "customer_segments": "...",
-    "cost_structure": "...",
-    "revenue_streams": "..."
-  },
-  "scoring": {
-    "product_market_fit": {
-      "score": 0,
-      "max": 30,
-      "rationale": "...",
-      "risks": ["...", "..."]
-    },
-    "market_size_growth": {
-      "score": 0,
-      "max": 25,
-      "rationale": "...",
-      "risks": ["...", "..."]
-    },
-    "competitive_differentiation": {
-      "score": 0,
-      "max": 20,
-      "rationale": "...",
-      "risks": ["...", "..."]
-    },
-    "business_model_viability": {
-      "score": 0,
-      "max": 15,
-      "rationale": "...",
-      "risks": ["...", "..."]
-    },
-    "go_to_market_feasibility": {
-      "score": 0,
-      "max": 10,
-      "rationale": "...",
-      "risks": ["...", "..."]
-    }
-  },
-  "go_no_go": {
-    "total_score": 0,
-    "verdict": "GO / CONDITIONAL GO / NO-GO",
-    "summary": "...",
-    "top_risks": ["...", "...", "..."],
-    "recommendations": ["...", "...", "..."]
-  }
-}
+  "what_would_change_my_mind": {{
+    "raise_confidence": ["specific evidence that would make this more promising"],
+    "lower_confidence": ["specific evidence that would make this less promising"]
+  }},
+  "dimensions": {{
+    "market":         [{{"claim": "...", "basis": "Evidence | Inference | Assumption"}}],
+    "competition":    [{{"claim": "...", "basis": "..."}}],
+    "user_pain":      [{{"claim": "...", "basis": "..."}}],
+    "business_model": [{{"claim": "...", "basis": "..."}}],
+    "feasibility":    [{{"claim": "...", "basis": "..."}}]
+  }},
+  "score": 0,
+  "next_step": "the single most useful thing to do this week"
+}}"""
 
-Scoring guide:
-- product_market_fit: max 30. Below 18 = weak PMF.
-- market_size_growth: max 25. Below 15 = too small or shrinking.
-- competitive_differentiation: max 20. Below 12 = not differentiated enough.
-- business_model_viability: max 15. Below 9 = unclear path to revenue.
-- go_to_market_feasibility: max 10. Below 6 = hard to reach users.
-- Total verdict: GO = 75+, CONDITIONAL GO = 50-74, NO-GO = below 50."""
+B2C_RULES = "- Treat this as a consumer product: the user and the buyer are usually the same person."
+B2B_RULES = """- Treat this as a B2B product. Separate the BUYER (who pays and signs) from the USER (who uses it daily).
+- At least one riskiest assumption must be about the buyer: budget owner, procurement, switching cost,
+  or sales cycle length.
+- Consider compliance, security review, and integration with existing systems under feasibility."""
 
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        max_tokens=3000,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Analyze this product concept and return JSON only:\n\n" + product_input}
-        ]
-    )
+DIM_LABELS = {"market": "Market", "competition": "Competition", "user_pain": "User pain",
+              "business_model": "Business model", "feasibility": "Feasibility"}
+BASIS_ICON = {"Evidence": "🟢", "Inference": "🟡", "Assumption": "🔴"}
 
-    result_text = response.choices[0].message.content
+# ---------------------------------------------------------------- helpers
 
-    try:
-        clean = result_text.strip()
-        if clean.startswith("```"):
-            clean = clean.split("```")[1]
-            if clean.startswith("json"):
-                clean = clean[4:]
-        return json.loads(clean.strip())
-    except Exception:
-        return {"error": result_text}
+def read_upload(file):
+    name = file.name.lower()
+    if name.endswith(".pdf"):
+        from PyPDF2 import PdfReader
+        return "\n".join(p.extract_text() or "" for p in PdfReader(file).pages)
+    if name.endswith(".docx"):
+        import docx
+        return "\n".join(p.text for p in docx.Document(file).paragraphs)
+    return file.read().decode("utf-8", errors="ignore")
 
-st.set_page_config(page_title="PM Product Analyzer", page_icon="📊", layout="wide")
-st.title("📊 PM Product Analyzer")
-st.caption("Enter a product concept to generate market research, competitor analysis, and a Go/No-go recommendation.")
+def analyze(idea, mode):
+    client = OpenAI(api_key=os.environ.get("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
+    system = SYSTEM_PROMPT.format(mode_rules=B2B_RULES if mode == "B2B" else B2C_RULES)
+    resp = client.chat.completions.create(
+        model=MODEL, temperature=TEMPERATURE, max_tokens=4000,
+        response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": f"Product idea:\n{idea}"}])
+    raw = re.sub(r"```json|```", "", resp.choices[0].message.content).strip()
+    return json.loads(raw)
 
-with st.expander("📋 Suggested input format"):
+def basis_tag(b):
+    b = (b or "").split("|")[0].strip()
+    return f"{BASIS_ICON.get(b, '⚪')} {b or 'Unlabeled'}"
+
+def to_markdown(r, idea, mode):
+    out = [f"# Assumption review: {r.get('one_line_summary','')}", "",
+           f"Mode: {mode} | Confidence: {r.get('confidence')} | Reference score: {r.get('score')}/100", "",
+           f"**Target user:** {r.get('assumed_target_user','')}", "",
+           f"**Why this confidence:** {r.get('confidence_reason','')}", "", "## Riskiest assumptions"]
+    for i, a in enumerate(r.get("riskiest_assumptions", []), 1):
+        out += [f"### {i}. {a.get('assumption')}", f"- Why risky: {a.get('why_risky')}",
+                f"- Basis: {a.get('basis')}", f"- Cheapest test ({a.get('test_type')}): {a.get('cheapest_test')}",
+                f"- Pass signal: {a.get('pass_signal')}", ""]
+    w = r.get("what_would_change_my_mind", {})
+    out += ["## What would change this", "**Raise:** " + "; ".join(w.get("raise_confidence", [])),
+            "", "**Lower:** " + "; ".join(w.get("lower_confidence", [])), "",
+            f"## Next step\n{r.get('next_step','')}", "", "---", "Original input:", "", idea]
+    return "\n".join(out)
+
+def log_feedback(answer, summary):
+    # Ephemeral on Streamlit Cloud (resets on restart). Swap for Google Sheets when you run a real test.
+    with open("feedback.csv", "a", newline="") as f:
+        csv.writer(f).writerow([datetime.datetime.now().isoformat(), answer, summary])
+
+# ---------------------------------------------------------------- UI
+
+st.set_page_config(page_title="Product Analyzer", page_icon="🧪", layout="centered")
+st.title("Product Analyzer")
+st.write("Find the assumptions your idea depends on, and the cheapest way to test each one.")
+
+if "history" not in st.session_state:
+    st.session_state.history = []   # list of dicts: {idea, mode, result}
+
+last = st.session_state.history[-1] if st.session_state.history else None
+
+mode = st.radio("Who pays for it?", ["B2C", "B2B"], horizontal=True,
+                captions=["The user pays", "A business pays, its people use it"],
+                index=0 if not last else ["B2C", "B2B"].index(last["mode"]))
+with st.expander("Suggested input format"):
     st.markdown("""
-Fill in as many fields as possible for a more accurate analysis:
-
 ```
 Product name: [name]
-Target users: [who are they, age range, role]
-Core problem: [what pain point are you solving]
-Solution: [how your product solves it]
-Market: [which market/industry]
-Monetization: [how you plan to make money]
+Target users: [who they are, age range, role]
+Core problem: [the pain point you're solving]
+Solution: [how the product solves it]
+Market: [market or industry]
+Monetization: [how it makes money]
 Stage: [idea / MVP / prototype]
 ```
 """)
+upload = st.file_uploader("Upload a PRD or pitch doc (optional)", type=["pdf", "docx", "txt", "md"])
+idea = st.text_area("Describe the idea", height=160,
+                    value=last["idea"] if last else "",
+                    placeholder="What it is, who it's for, what problem it solves, and how it makes money.")
 
-st.subheader("Enter Product Information")
-col1, col2 = st.columns(2)
-
-with col1:
-    text_input = st.text_area(
-        "Text Description",
-        placeholder="Product name: ...\nTarget users: ...\nCore problem: ...\nSolution: ...\nMarket: ...\nMonetization: ...",
-        height=220,
-        key="text_input"
-    )
-
-with col2:
-    uploaded_file = st.file_uploader("Or upload a PDF / DOCX", type=["pdf", "docx"], key=f"uploader_{st.session_state.get('uploader_key', 0)}")
-    if uploaded_file:
-        file_text = extract_text_from_file(uploaded_file)
-        st.success(f"File read successfully — {len(file_text)} characters extracted.")
-
-final_input = text_input or ""
-if uploaded_file and "file_text" in dir():
-    final_input += "\n\n" + file_text
-
-st.caption("Please wait a few seconds after the page loads before clicking Analyze.")
-def clear_inputs():
-    st.session_state["text_input"] = ""
-    st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
-
-col_btn1, col_btn2, col_rest = st.columns([1.5, 1, 6])
-with col_btn1:
-    analyze = st.button("Analyze Product", type="primary", disabled=not final_input.strip())
-with col_btn2:
-    st.button("Clear", type="secondary", on_click=clear_inputs)
-
-if analyze:
-    with st.spinner("Analyzing your product concept... this may take 20-40 seconds."):
-        result = analyze_product(final_input)
-
-    if "error" in result:
-        st.error("Parsing failed. Raw output:")
-        st.code(result["error"])
+label = "Re-run with my changes" if last else "Find the riskiest assumptions"
+if st.button(label, type="primary"):
+    text = (read_upload(upload) + "\n\n" + idea) if upload else idea
+    if len(text.strip()) < 40:
+        st.error("Add a bit more detail: who it's for and what problem it solves.")
     else:
-        st.success("Analysis complete!")
-        st.divider()
-
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 Market Size", "🏆 Competitors", "👤 User Pain Points", "💰 Business Model", "🚦 Go / No-go"
-        ])
-
-        with tab1:
-            m = result.get("market", {})
-            tam = m.get("tam", "N/A")
-            sam = m.get("sam", "N/A")
-            som = m.get("som", "N/A")
-            st.markdown("### Market Size Overview")
-            col_tam, col_sam, col_som = st.columns(3)
-            with col_tam:
-                st.markdown(f"""<div style="background:#1a6eb5;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">TAM</div>
-<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Total Addressable Market</div>
-<div style="font-size:28px;font-weight:700;">{tam}</div></div>""", unsafe_allow_html=True)
-            with col_sam:
-                st.markdown(f"""<div style="background:#1d9e75;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SAM</div>
-<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Addressable Market</div>
-<div style="font-size:28px;font-weight:700;">{sam}</div></div>""", unsafe_allow_html=True)
-            with col_som:
-                st.markdown(f"""<div style="background:#3b8bd4;border-radius:16px;padding:32px 16px;text-align:center;color:white;">
-<div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">SOM</div>
-<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">Serviceable Obtainable Market</div>
-<div style="font-size:28px;font-weight:700;">{som}</div></div>""", unsafe_allow_html=True)
-            st.markdown("### Key Market Trends")
-            for t in m.get("trends", []):
-                st.write(f"- {t}")
-
-        with tab2:
-            competitors = result.get("competitors", [])
-            if competitors:
-                for c in competitors:
-                    with st.expander(c.get("name", "Competitor")):
-                        st.write(f"**Strengths:** {c.get('strengths', '')}")
-                        st.write(f"**Weaknesses:** {c.get('weaknesses', '')}")
-            else:
-                st.info("No competitor data available.")
-
-        with tab3:
-            p = result.get("user_pain_points", {})
-            st.write("**Jobs-to-be-done:**")
-            for j in p.get("jtbd", []):
-                st.write(f"- {j}")
-            st.write("**Frustrations with existing solutions:**")
-            for f in p.get("frustrations", []):
-                st.write(f"- {f}")
-
-        with tab4:
-            b = result.get("business_model", {})
-            st.markdown("### Business Model Canvas")
-
-            cell_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#fff;height:100%;box-sizing:border-box;"
-            label_style = "font-size:11px;font-weight:600;color:#666;margin-bottom:6px;"
-            val_style = "font-size:12px;color:#222;line-height:1.5;overflow-wrap:break-word;word-break:break-word;"
-            bot_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#f8f8f8;box-sizing:border-box;"
-
-            def c(icon, label, key, style=cell_style):
-                val = b.get(key, "—")
-                return f'<div style="{style}"><div style="{label_style}">{icon} {label}</div><div style="{val_style}">{val}</div></div>'
-
-            st.markdown(f"""
-<table style="width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;">
-<tr>
-  <td rowspan="2" style="width:20%;vertical-align:top;">{c("🔗","Key Partners","key_partners")}</td>
-  <td style="width:20%;vertical-align:top;">{c("✅","Key Activities","key_activities")}</td>
-  <td rowspan="2" style="width:20%;vertical-align:top;">{c("🎁","Value Propositions","value_propositions")}</td>
-  <td style="width:20%;vertical-align:top;">{c("❤️","Customer Relationships","customer_relationships")}</td>
-  <td rowspan="2" style="width:20%;vertical-align:top;">{c("👥","Customer Segments","customer_segments")}</td>
-</tr>
-<tr>
-  <td style="vertical-align:top;">{c("🏗️","Key Resources","key_resources")}</td>
-  <td style="vertical-align:top;">{c("🚚","Channels","channels")}</td>
-</tr>
-<tr>
-  <td colspan="2" style="vertical-align:top;">{c("🏷️","Cost Structure","cost_structure", bot_style)}</td>
-  <td></td>
-  <td colspan="2" style="vertical-align:top;">{c("💵","Revenue Streams","revenue_streams", bot_style)}</td>
-</tr>
-</table>
-""", unsafe_allow_html=True)
-
-        with tab5:
-            g = result.get("go_no_go", {})
-            scoring = result.get("scoring", {})
-            total = g.get("total_score", 0)
+        with st.spinner("Reviewing assumptions…"):
             try:
-                total = int(total)
-            except Exception:
-                total = 0
-            verdict = g.get("verdict", "")
+                st.session_state.history.append({"idea": text, "mode": mode, "result": analyze(text, mode)})
+                st.rerun()
+            except json.JSONDecodeError:
+                st.error("The model returned an unreadable response. Run it again.")
+            except Exception as e:
+                st.error(f"Request failed: {e}")
 
-            if "NO-GO" in verdict:
-                st.error(f"## {verdict}　　Total Score: {total} / 100")
-            elif "CONDITIONAL" in verdict:
-                st.warning(f"## {verdict}　　Total Score: {total} / 100")
-            else:
-                st.success(f"## {verdict}　　Total Score: {total} / 100")
+if not last:
+    st.stop()
 
-            st.progress(total / 100)
-            st.markdown("---")
-            st.markdown("### Scoring Breakdown")
+r = last["result"]
+prev = st.session_state.history[-2]["result"] if len(st.session_state.history) > 1 else None
 
-            dimensions = [
-                ("Product-market fit", "product_market_fit", 30),
-                ("Market size & growth", "market_size_growth", 25),
-                ("Competitive differentiation", "competitive_differentiation", 20),
-                ("Business model viability", "business_model_viability", 15),
-                ("Go-to-market feasibility", "go_to_market_feasibility", 10),
-            ]
+st.divider()
+st.subheader(r.get("one_line_summary", ""))
+c1, c2, c3 = st.columns(3)
+c1.metric("Confidence", r.get("confidence", "?"),
+          delta=f"was {prev.get('confidence')}" if prev and prev.get("confidence") != r.get("confidence") else None,
+          delta_color="off")
+c2.metric("Reference score", r.get("score", "?"),
+          delta=(r.get("score", 0) - prev.get("score", 0)) if prev else None)
+c3.metric("Version", len(st.session_state.history))
+st.caption(f"Assumed target user: {r.get('assumed_target_user','')}")
+st.write(r.get("confidence_reason", ""))
 
-            for label, key, max_score in dimensions:
-                dim = scoring.get(key, {})
-                score = dim.get("score", 0)
-                try:
-                    score = int(score)
-                except Exception:
-                    score = 0
-                rationale = dim.get("rationale", "")
-                risks = dim.get("risks", [])
-                pct = score / max_score
+st.markdown("### The three riskiest assumptions")
+for i, a in enumerate(r.get("riskiest_assumptions", []), 1):
+    with st.container(border=True):
+        st.markdown(f"**{i}. {a.get('assumption')}**  \n{basis_tag(a.get('basis'))}")
+        st.write(f"If wrong: {a.get('why_risky')}")
+        st.markdown(f"**Test it ({a.get('test_type')}):** {a.get('cheapest_test')}  \n"
+                    f"**It holds if:** {a.get('pass_signal')}")
 
-                if pct >= 0.75:
-                    color = "#1d9e75"
-                elif pct >= 0.5:
-                    color = "#f0a500"
-                else:
-                    color = "#e03c3c"
+w = r.get("what_would_change_my_mind", {})
+col_a, col_b = st.columns(2)
+col_a.markdown("**Would raise confidence**\n\n" + "\n".join(f"- {x}" for x in w.get("raise_confidence", [])))
+col_b.markdown("**Would lower confidence**\n\n" + "\n".join(f"- {x}" for x in w.get("lower_confidence", [])))
 
-                with st.expander(f"{label}　　{score} / {max_score}"):
-                    st.markdown(f"""<div style="background:#f5f5f5;border-radius:8px;padding:2px 8px;margin-bottom:10px;">
-<div style="background:{color};height:8px;border-radius:6px;width:{int(pct*100)}%;"></div></div>""", unsafe_allow_html=True)
-                    st.write(f"**Rationale:** {rationale}")
-                    if risks:
-                        st.write("**Risks:**")
-                        for r in risks:
-                            st.write(f"- {r}")
+st.info(f"**This week:** {r.get('next_step','')}")
 
-            st.markdown("---")
-            st.markdown("### Overall Assessment")
-            st.write(g.get("summary", ""))
-            st.markdown("**Top Risks:**")
-            for r in g.get("top_risks", []):
-                st.write(f"- {r}")
-            st.markdown("**Recommendations:**")
-            for r in g.get("recommendations", []):
-                st.write(f"- {r}")
+with st.expander("Full analysis by dimension"):
+    st.caption("🟢 Evidence  🟡 Inference  🔴 Assumption")
+    tabs = st.tabs(list(DIM_LABELS.values()))
+    for tab, key in zip(tabs, DIM_LABELS):
+        with tab:
+            for c in r.get("dimensions", {}).get(key, []):
+                st.markdown(f"{basis_tag(c.get('basis'))} — {c.get('claim')}")
 
-        st.divider()
-        st.download_button(
-            label="Download Full Report (JSON)",
-            data=json.dumps(result, ensure_ascii=False, indent=2),
-            file_name="pm_analysis_report.json",
-            mime="application/json"
-        )
+if prev:
+    with st.expander("Compare with previous version"):
+        a, b = st.columns(2)
+        a.markdown("**Before**\n\n" + "\n".join(f"- {x.get('assumption')}" for x in prev.get("riskiest_assumptions", [])))
+        b.markdown("**Now**\n\n" + "\n".join(f"- {x.get('assumption')}" for x in r.get("riskiest_assumptions", [])))
+
+st.divider()
+st.download_button("Download as Markdown", to_markdown(r, last["idea"], last["mode"]),
+                   file_name="assumption_review.md")
+
+fb = st.radio("Will you run one of these tests in the next two weeks?",
+              ["Yes", "Maybe", "No"], index=None, horizontal=True)
+if fb:
+    log_feedback(fb, r.get("one_line_summary", ""))
+    st.caption("Thanks. Recorded.")
+
+if st.button("Start a new idea"):
+    st.session_state.history = []
+    st.rerun()
