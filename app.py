@@ -3,12 +3,12 @@ from openai import OpenAI
 import os
 import json
 import html
-import urllib.parse
-import math
 import io
 import re
+import urllib.parse
 import PyPDF2
 import docx
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -36,6 +36,14 @@ def extract_text_from_file(uploaded_file):
         return "\n".join(p.text for p in doc.paragraphs)
     return ""
 
+def parse_json(text):
+    clean = text.strip()
+    if clean.startswith("```"):
+        clean = clean.split("```")[1]
+        if clean.startswith("json"):
+            clean = clean[4:]
+    return json.loads(clean.strip())
+
 # ================================================================ analysis prompt
 
 SYSTEM_PROMPT = """You are a skeptical senior product manager with 15+ years of experience taking early-stage
@@ -44,11 +52,10 @@ and lay out a concrete, cheap validation plan the founder can start this week.
 
 Rules:
 - Be critical and specific. No generic advice. Use concrete numbers, names, channels, and sample sizes.
-- Label each claim with a "certainty" field, using only two values:
-    "Fact"     = the user stated it, or it is widely documented public knowledge
-    "Estimate" = your own reasoning or guess; the founder should verify it
-- You have no live market data. Any market size, growth, or price figure must be "Estimate"
-  unless the user provided it. For market size, show a bottom-up calculation (users x price x frequency).
+- In assumption, why_risky, pass_signal, details, and decision_rule, wrap the single most important phrase
+  in **double asterisks** so it stands out. Bold only one short phrase per field.
+- You have no live market data. For market size, show a bottom-up calculation (users x price x frequency)
+  and say how to verify each input.
 - Pick exactly 3 riskiest assumptions, most dangerous first. Classify each as Desirability (do people want it),
   Viability (will it make money), Feasibility (can it be built), or Usability (can people use it).
 - Validation plan: 3-4 steps ordered from cheapest/fastest to most expensive. Test desirability before
@@ -58,7 +65,12 @@ Rules:
   price, key features, and target user. Choose two axes for a positioning map that matter most to buyers,
   and place each competitor and the user's product on 1-10 scales.
 - Business model canvas: 2-4 specific bullet points per block.
-- Unit economics are rough estimates.
+- Pain points: 4-6 specific pains, each with who has it, how they cope today, how often it happens,
+  how severe it is, which feature addresses it, and which validation step will confirm it.
+- Cost model: classify the product as Hardware, Software, or Connected (hardware plus an app or cloud service).
+  For Hardware or Connected, list a bill of materials (BOM) of 6-12 main components with rough unit costs in USD.
+  For Software or Connected, list monthly cost-to-serve items per user (hosting, AI or API calls, support,
+  payment fees). Use plain numbers without currency symbols in numeric fields.
 - The score (0-100) is a secondary reference only. Above 70 should be rare.
 {mode_rules}
 
@@ -99,38 +111,44 @@ Return ONLY valid json in exactly this structure:
     "lower_confidence": ["specific evidence"]
   }},
   "market": {{
-    "tam": {{"value": "e.g. $2B", "calculation": "bottom-up formula", "certainty": "Fact | Estimate", "how_to_verify": "..."}},
-    "sam": {{"value": "...", "calculation": "...", "certainty": "Fact | Estimate", "how_to_verify": "..."}},
-    "som": {{"value": "...", "calculation": "...", "certainty": "Fact | Estimate", "how_to_verify": "..."}},
-    "trends": [{{"claim": "...", "certainty": "Fact | Estimate"}}]
+    "tam": {{"value": "e.g. $2B", "calculation": "bottom-up formula", "how_to_verify": "..."}},
+    "sam": {{"value": "...", "calculation": "...", "how_to_verify": "..."}},
+    "som": {{"value": "...", "calculation": "...", "how_to_verify": "..."}},
+    "trends": ["..."]
   }},
   "positioning_axes": {{"x_label": "e.g. Price (low to high)", "y_label": "e.g. Routine guidance (none to full)"}},
   "your_position": {{"x": 5, "y": 5}},
   "competitors": [
     {{
       "name": "...", "type": "Direct | Indirect | Substitute", "price": "typical price",
-      "key_features": "...", "target_user": "...", "strength": "...", "weakness": "...",
-      "x": 5, "y": 5, "certainty": "Fact | Estimate"
+      "key_features": "...", "target_user": "...", "strength": "...", "weakness": "...", "x": 5, "y": 5
     }}
   ],
   "user_pain_points": {{
-    "jtbd": [{{"claim": "...", "certainty": "Fact | Estimate"}}],
-    "frustrations": [{{"claim": "...", "certainty": "Fact | Estimate"}}]
+    "jtbd": ["When I..., I want to..., so I can..."],
+    "pains": [
+      {{
+        "pain": "...", "who": "...", "current_workaround": "how they cope today",
+        "frequency": "Daily | Weekly | Monthly | Rarely", "severity": "High | Medium | Low",
+        "addressed_by": "which feature", "validate_in": "e.g. Step 1"
+      }}
+    ]
   }},
   "business_model": {{
-    "key_partners": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "key_activities": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "key_resources": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "value_propositions": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "customer_relationships": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "channels": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "customer_segments": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "cost_structure": [{{"point": "...", "certainty": "Fact | Estimate"}}],
-    "revenue_streams": [{{"point": "...", "certainty": "Fact | Estimate"}}]
+    "key_partners": ["..."], "key_activities": ["..."], "key_resources": ["..."],
+    "value_propositions": ["..."], "customer_relationships": ["..."], "channels": ["..."],
+    "customer_segments": ["..."], "cost_structure": ["..."], "revenue_streams": ["..."]
   }},
-  "unit_economics": {{
-    "price": "...", "unit_cost": "...", "gross_margin": "...",
-    "customer_acquisition_cost": "...", "payback": "...", "note": "the biggest unknown here"
+  "cost_model": {{
+    "product_type": "Hardware | Software | Connected",
+    "price_per_unit": 0,
+    "subscription_price_per_month": 0,
+    "bom": [{{"component": "...", "qty": 1, "unit_cost": 0, "note": "..."}}],
+    "manufacturing_and_logistics_per_unit": 0,
+    "cost_to_serve": [{{"item": "...", "monthly_cost_per_user": 0, "note": "..."}}],
+    "customer_acquisition_cost": 0,
+    "expected_lifetime_months": 24,
+    "biggest_unknown": "..."
   }}
 }}"""
 
@@ -138,14 +156,6 @@ B2C_RULES = "- Treat this as a consumer product: the user and the buyer are usua
 B2B_RULES = """- Treat this as a B2B product. Separate the BUYER (who pays and signs) from the USER (who uses it daily).
 - At least one riskiest assumption must be about the buyer: budget owner, procurement, switching cost, or sales cycle.
 - Consider compliance, security review, and integration with existing systems."""
-
-def parse_json(text):
-    clean = text.strip()
-    if clean.startswith("```"):
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
-    return json.loads(clean.strip())
 
 def analyze_product(product_input, mode, previous=None):
     system_prompt = SYSTEM_PROMPT.format(mode_rules=B2B_RULES if mode == "B2B" else B2C_RULES)
@@ -165,7 +175,7 @@ def analyze_product(product_input, mode, previous=None):
     except Exception:
         return {"error": text}
 
-# ================================================================ test kit prompt
+# ================================================================ test kit
 
 KIT_PROMPT = """You are a senior UX researcher and market research analyst. Write ready-to-use research materials
 for a founder who will run this validation step tomorrow. Be concrete and specific to the product.
@@ -195,7 +205,7 @@ def default_kit(method):
         return ["Survey", "Recruiting post"]
     if "landing" in m:
         return ["Landing page copy", "Recruiting post"]
-    if "prototype" in m or "usability" in m:
+    if "prototype" in m or "usability" in m or "concierge" in m or "pilot" in m:
         return ["Screener questions", "Prototype test script", "Recruiting post"]
     return ["Screener questions", "Interview guide"]
 
@@ -254,7 +264,9 @@ Rules:
   and keep P0 to the smallest set that tests the riskiest assumptions.
 - Metrics: one North Star metric, 2-3 supporting metrics, 1-2 guardrail metrics, each with a definition.
 - If test results are provided, use them, and move any assumption they confirm out of open questions.
-- Use Markdown tables where the template asks for a table.
+- Use Markdown tables where the template asks for a table. Keep tables to 5 columns or fewer with short cells.
+- Define each persona in the personas section with a name and a one-line description, and mark it (to validate).
+- Write user stories as a bulleted list: "As a [persona], I want [action], so that [benefit]." Do not use a table.
 Template:
 {template}"""
 
@@ -335,48 +347,61 @@ def read_template(file):
 
 # ================================================================ display helpers
 
-def norm_certainty(v):
-    t = str(v or "").lower()
-    if any(k in t for k in ("fact", "back", "evid")):
-        return "Fact"
-    if any(k in t for k in ("estim", "guess", "infer", "untest", "assum")):
-        return "Estimate"
-    return None
+TYPE_INFO = {
+    "Desirability": ("Do people want it?", "#1a6eb5"),
+    "Viability":    ("Will it make money?", "#1d9e75"),
+    "Feasibility":  ("Can it be built?",   "#8a63d2"),
+    "Usability":    ("Can people use it?", "#d9822b"),
+}
 
-def esc(x):
-    return html.escape(str(x if x is not None else ""))
+CSS = """
+<style>
+.pa-table {width:100%; border-collapse:collapse; font-size:14px; line-height:1.55; table-layout:auto;}
+.pa-table th {text-align:left; font-weight:600; font-size:13px; color:#4b5563; background:#f6f7f9;
+              padding:10px 12px; border-bottom:1px solid #e3e5e8;}
+.pa-table td {vertical-align:top; padding:12px; border-bottom:1px solid #eceef1; color:#1f2937;
+              word-break:normal; overflow-wrap:anywhere;}
+.pa-badge {display:inline-block; border-radius:6px; padding:2px 9px; font-size:12px; font-weight:600;
+           color:#fff; white-space:nowrap;}
+.pa-card {border:1px solid #e3e5e8; border-radius:12px; padding:16px 18px; margin:0 0 14px 0; background:#fff;}
+.pa-label {font-size:12px; font-weight:600; color:#6b7280; margin:10px 0 2px 0;}
+.pa-text {font-size:14px; line-height:1.6; color:#1f2937;}
+.pa-muted {font-size:13px; color:#6b7280; line-height:1.5;}
+.pa-grid {display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;}
+.pa-type {border:1px solid #e3e5e8; border-radius:12px; padding:12px 14px;}
+.pa-note {background:#f6f7f9; border-radius:8px; padding:10px 14px; font-size:13px; color:#4b5563; margin:4px 0 14px 0;}
+.pa-table b, .pa-text b {font-weight:650; color:#111827;}
+div[data-testid="stMarkdownContainer"] table {font-size:13px; width:100%;}
+div[data-testid="stMarkdownContainer"] th, div[data-testid="stMarkdownContainer"] td {white-space:normal; vertical-align:top;}
+div[data-testid="stMarkdownContainer"] td:first-child {white-space:nowrap;}
+</style>
+"""
 
-def tag(v):
-    # Only estimates are marked, so the page stays calm and the mark means "check this".
-    if norm_certainty(v) != "Estimate":
-        return ""
-    return ('<span title="The AI\'s best guess. Check it before you rely on it." '
-            'style="border:1px solid #c98a00;color:#c98a00;border-radius:10px;padding:0 7px;'
-            'font-size:11px;font-weight:600;margin-left:6px;white-space:nowrap;cursor:help;">Estimate</span>')
+def rich(text):
+    """Escape, protect $ from being read as math, and turn **x** into bold."""
+    t = html.escape(str(text if text is not None else ""))
+    t = t.replace("$", "&#36;")
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
 
-def label_text(v):
-    return {"Fact": "Fact", "Estimate": "Estimate — verify"}.get(norm_certainty(v), "—")
+def md_safe(text):
+    """For plain st.markdown output: keep dollar signs from turning into math."""
+    return str(text or "").replace("$", "\\$")
 
-def legend():
-    st.caption("Points marked " + "Estimate" + " are the AI's best guess. Check them before relying on them. "
-               "Unmarked points come from your description or well-known public information.")
+def show(html_str):
+    st.markdown(html_str, unsafe_allow_html=True)
 
-def claim_lines(items, field="claim"):
-    out = []
-    for item in items or []:
-        if isinstance(item, dict):
-            out.append(f'<div style="margin:6px 0;">• {esc(item.get(field, ""))}{tag(item.get("certainty"))}</div>')
-        else:
-            out.append(f'<div style="margin:6px 0;">• {esc(item)}</div>')
-    return "".join(out)
+def type_badge(t):
+    key = next((k for k in TYPE_INFO if k.lower() in str(t).lower()), None)
+    if not key:
+        return rich(t)
+    return f'<span class="pa-badge" style="background:{TYPE_INFO[key][1]};">{key}</span>'
 
-def ab_sample_size(p1, p2, z_alpha=1.96, z_beta=0.8416):
-    """Visitors needed per variant to detect p1 vs p2 (two-sided 5% significance, 80% power)."""
-    if p1 <= 0 or p2 <= 0 or p1 >= 1 or p2 >= 1 or p1 == p2:
-        return None
-    pbar = (p1 + p2) / 2
-    num = (z_alpha * math.sqrt(2 * pbar * (1 - pbar)) + z_beta * math.sqrt(p1 * (1 - p1) + p2 * (1 - p2))) ** 2
-    return math.ceil(num / (p1 - p2) ** 2)
+def note(text):
+    show(f'<div class="pa-note">{rich(text)}</div>')
+
+def bullets(items):
+    return "".join(f'<div style="margin:5px 0;">• {rich(x.get("point") or x.get("claim") if isinstance(x, dict) else x)}</div>'
+                   for x in (items or []))
 
 def search_url(name):
     return "https://www.google.com/search?q=" + urllib.parse.quote_plus(str(name))
@@ -387,14 +412,23 @@ def to_num(v, default=5.0):
     except Exception:
         return default
 
+def beta_pdf(x, a, b):
+    from math import lgamma
+    log_b = lgamma(a) + lgamma(b) - lgamma(a + b)
+    return np.exp((a - 1) * np.log(x) + (b - 1) * np.log(1 - x) - log_b)
+
 # ================================================================ page
 
 st.set_page_config(page_title="PM Product Analyzer", page_icon="📊", layout="wide")
+show(CSS)
 st.title("📊 PM Product Analyzer")
 st.caption("Enter a product concept. Get its riskiest assumptions, a step-by-step validation plan, "
-           "ready-to-use research materials, and a market, competitor, and business model overview.")
+           "ready-to-use research materials, an MRD or PRD draft, and a market, competitor, and business model overview.")
 
-for k, v in {"history": [], "kit": None, "doc": None}.items():
+SECTIONS = ["🎯 Riskiest Assumptions", "🧪 Validation Plan", "🏆 Competitors", "📈 Market Size",
+            "👤 User Pain Points", "💰 Business Model", "📄 MRD / PRD"]
+
+for k, v in {"history": [], "kits": {}, "doc": None, "nav": SECTIONS[0], "run_id": 0}.items():
     st.session_state.setdefault(k, v)
 
 if not API_KEY:
@@ -440,29 +474,29 @@ def clear_inputs():
     st.session_state["text_input"] = ""
     st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
     st.session_state["history"] = []
-    st.session_state["kit"] = None
+    st.session_state["kits"] = {}
     st.session_state["doc"] = None
+    st.session_state["nav"] = SECTIONS[0]
 
 disabled = not final_input.strip() or not API_KEY
-update = False
 if st.session_state["history"]:
     st.caption("Changed the same idea? Choose Update to compare with the last result. "
                "Working on a different product? Choose New idea.")
-    col_btn1, col_btn2, col_btn3, col_rest = st.columns([1.6, 1.6, 1, 4])
-    with col_btn1:
+    b1, b2, b3, _ = st.columns([1.6, 1.6, 1, 4])
+    with b1:
         update = st.button("Update this idea", type="primary", disabled=disabled)
-    with col_btn2:
+    with b2:
         new_idea = st.button("Analyze as a new idea", disabled=disabled)
-    with col_btn3:
+    with b3:
         st.button("Clear", type="secondary", on_click=clear_inputs)
     if new_idea:
         st.session_state["history"] = []
     analyze = update or new_idea
 else:
-    col_btn1, col_btn2, col_rest = st.columns([1.5, 1, 6])
-    with col_btn1:
+    b1, b2, _ = st.columns([1.5, 1, 6])
+    with b1:
         analyze = st.button("Analyze Product", type="primary", disabled=disabled)
-    with col_btn2:
+    with b2:
         st.button("Clear", type="secondary", on_click=clear_inputs)
 
 if analyze:
@@ -473,12 +507,14 @@ if analyze:
         except Exception as e:
             result = {"error": f"Request failed: {e}"}
     if "error" in result:
-        st.error("Analysis failed. Click Analyze Product again. Details:")
+        st.error("Analysis failed. Click the button again. Details:")
         st.code(result["error"])
     else:
         st.session_state["history"].append({"idea": final_input, "mode": mode, "result": result})
-        st.session_state["kit"] = None
+        st.session_state["kits"] = {}
+        st.session_state["run_id"] += 1
         st.session_state["doc"] = None
+        st.session_state["nav"] = SECTIONS[0]
 
 if not st.session_state["history"]:
     st.stop()
@@ -489,229 +525,250 @@ result = st.session_state["history"][-1]["result"]
 prev = st.session_state["history"][-2]["result"] if len(st.session_state["history"]) > 1 else None
 
 if prev:
-    st.success("Analysis updated. The Validation Plan tab compares it with your previous description.")
+    st.success("Analysis updated. The Validation Plan section compares it with your previous description.")
 else:
     st.success("Analysis complete!")
 st.divider()
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "🎯 Riskiest Assumptions", "🧪 Validation Plan", "🏆 Competitors",
-    "📈 Market Size", "👤 User Pain Points", "💰 Business Model", "📄 MRD / PRD"
-])
+# A stateful menu instead of st.tabs, so clicking a button never sends you back to the first section.
+if hasattr(st, "segmented_control"):
+    st.segmented_control("Section", SECTIONS, key="nav", label_visibility="collapsed")
+else:
+    st.radio("Section", SECTIONS, key="nav", horizontal=True, label_visibility="collapsed")
+section = st.session_state.get("nav") or SECTIONS[0]
+st.write("")
 
-# ---------------- tab 1: assumptions
-with tab1:
-    st.markdown(f"### {esc(result.get('one_line_summary', ''))}")
-    st.caption(f"Assumed target user: {result.get('assumed_target_user', '')}  |  Stage: {result.get('stage', '—')}")
-    st.write("These are the beliefs your idea depends on that nobody has tested yet, most dangerous first. "
-             "Test them before investing in building.")
-    rows = []
-    for i, a in enumerate(result.get("riskiest_assumptions", []), 1):
-        rows.append({"#": i, "Assumption": a.get("assumption", ""), "Type": a.get("risk_type", ""),
-                     "Test": a.get("test_method", ""),
-                     "Time": a.get("test_time", ""), "Sample": a.get("sample", ""),
-                     "It holds if": a.get("pass_signal", "")})
-    if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-    st.markdown("#### Why each one matters")
-    for i, a in enumerate(result.get("riskiest_assumptions", []), 1):
-        with st.expander(f"{i}. {a.get('assumption', '')}"):
-            st.write(f"**Type:** {a.get('risk_type', '')}")
-            st.write(f"**If this is wrong:** {a.get('why_risky', '')}")
-    st.caption("Desirability = do people want it. Viability = will it make money. "
-               "Feasibility = can it be built. Usability = can people use it.")
+# ---------------- riskiest assumptions
+if section == SECTIONS[0]:
+    show(f'<h3 style="margin-bottom:4px;">{rich(result.get("one_line_summary", ""))}</h3>'
+         f'<div class="pa-muted">Assumed target user: {rich(result.get("assumed_target_user", ""))}'
+         f' &nbsp;|&nbsp; Stage: {rich(result.get("stage", "—"))}</div>')
+    st.write("")
+    risks = result.get("riskiest_assumptions", [])
+    present = {k for k in TYPE_INFO for a in risks if k.lower() in str(a.get("risk_type", "")).lower()}
+    cards = []
+    for k, (q, color) in TYPE_INFO.items():
+        n = sum(1 for a in risks if k.lower() in str(a.get("risk_type", "")).lower())
+        style = f"border-left:5px solid {color};" + ("" if k in present else "opacity:0.45;")
+        cards.append(f'<div class="pa-type" style="{style}"><div style="font-weight:650;color:{color};">{k}</div>'
+                     f'<div class="pa-text">{q}</div><div class="pa-muted">{n} risky assumption{"s" if n != 1 else ""}</div></div>')
+    show('<div class="pa-text" style="margin-bottom:8px;">Every idea has to pass four checks. '
+         'This is where your idea is weakest right now:</div><div class="pa-grid">' + "".join(cards) + "</div>")
+    st.write("")
+    st.markdown("#### The three riskiest assumptions, most dangerous first")
+    rows = "".join(
+        f"<tr><td><b>{i}</b></td><td>{type_badge(a.get('risk_type'))}</td><td>{rich(a.get('assumption'))}</td>"
+        f"<td>{rich(a.get('why_risky'))}</td><td>{rich(a.get('test_method'))}"
+        f"<div class='pa-muted' style='margin-top:6px;'>{rich(a.get('test_time'))} · {rich(a.get('sample'))}</div></td>"
+        f"<td>{rich(a.get('pass_signal'))}</td></tr>"
+        for i, a in enumerate(risks, 1))
+    show('<table class="pa-table"><tr><th style="width:3%">#</th><th style="width:10%">Type</th>'
+         '<th style="width:22%">Assumption</th><th style="width:22%">If this is wrong</th>'
+         '<th style="width:23%">Cheapest test</th><th style="width:20%">It holds if</th></tr>' + rows + "</table>")
 
-# ---------------- tab 2: validation plan + test kit
-with tab2:
+# ---------------- validation plan
+elif section == SECTIONS[1]:
     conf = str(result.get("confidence", "")).split("|")[0].strip().title()
+    color = {"High": "#1d9e75", "Medium": "#d9822b"}.get(conf, "#c0392b")
     try:
         score = int(float(result.get("score", 0)))
     except Exception:
         score = 0
-    banner = f"**Confidence: {conf}** — {result.get('confidence_reason', '')}"
-    if conf == "High":
-        st.success(banner)
-    elif conf == "Medium":
-        st.info(banner)
-    else:
-        st.warning(banner)
-    st.caption(f"Reference score: {score} / 100. Confidence reflects how much is already known, "
-               "not how good the idea is. The plan below is how you raise it.")
+    show(f'<div class="pa-card" style="border-left:6px solid {color};">'
+         f'<div style="font-size:20px;font-weight:700;color:{color};">Confidence: {rich(conf)}</div>'
+         f'<div class="pa-text" style="margin-top:6px;">{rich(result.get("confidence_reason", ""))}</div>'
+         f'<div class="pa-muted" style="margin-top:8px;">Reference score {score} / 100. Confidence shows how much is '
+         f'already known, not how good the idea is. The plan below is how you raise it.</div></div>')
     if prev:
-        st.info(f"Compared with your previous description: confidence {prev.get('confidence', '?')} → {conf}, "
-                f"score {prev.get('score', '?')} → {score}")
+        note(f"Compared with your previous description: confidence {prev.get('confidence', '?')} → {conf}, "
+             f"score {prev.get('score', '?')} → {score}")
 
-    st.markdown("### Your validation plan")
-    st.write("Cheapest and fastest tests first. Only move to the next step if the decision rule says continue.")
+    st.markdown("#### Your validation plan")
+    st.caption("Cheapest and fastest tests first. Move to the next step only if the decision rule says continue.")
     plan = result.get("validation_plan", [])
-    for i, s in enumerate(plan, 1):
-        with st.container(border=True):
-            st.markdown(f"**Step {i} · {esc(s.get('timing', ''))}: {esc(s.get('step', ''))}**")
-            st.write(f"**Goal:** {s.get('goal', '')}")
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"**Method**  \n{s.get('method', '')}")
-            c2.markdown(f"**Sample size**  \n{s.get('sample_size', '')}")
-            c3.markdown(f"**You'll end up with**  \n{s.get('deliverable', '')}")
-            st.write(f"**What to do:** {s.get('details', '')}")
-            st.write(f"**Where to recruit:** {s.get('where_to_recruit', '')}")
-            st.write(f"**Decision rule:** {s.get('decision_rule', '')}")
-
-    w = result.get("what_would_change_my_mind", {})
-    ca, cb = st.columns(2)
-    with ca:
-        st.markdown("**Results that would raise confidence:**")
-        for x in w.get("raise_confidence", []):
-            st.write(f"- {x}")
-    with cb:
-        st.markdown("**Results that would lower confidence:**")
-        for x in w.get("lower_confidence", []):
-            st.write(f"- {x}")
-
-    if plan:
-        st.divider()
-        st.markdown("### Build a test kit")
-        st.write("Pick a step and get ready-to-use materials: screener, interview guide, survey, recruiting post, and more.")
-        labels = [f"Step {i}: {s.get('step', '')} ({s.get('method', '')})" for i, s in enumerate(plan, 1)]
-        idx = st.selectbox("Which step are you running?", range(len(plan)), format_func=lambda i: labels[i])
-        parts = st.multiselect("What do you need?", list(KIT_OPTIONS.keys()),
-                               default=default_kit(plan[idx].get("method")), key=f"parts_{idx}")
-        if st.button("Generate test kit", type="primary", disabled=not parts):
+    for i, s_ in enumerate(plan, 1):
+        show(f'''<div class="pa-card">
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+  <span style="font-size:17px;font-weight:700;">Step {i}: {rich(s_.get("step"))}</span>
+  <span class="pa-badge" style="background:#4b5563;">{rich(s_.get("method"))}</span>
+  <span class="pa-muted">{rich(s_.get("timing"))}</span></div>
+<div class="pa-label">Goal</div><div class="pa-text">{rich(s_.get("goal"))}</div>
+<div class="pa-label">What to do</div><div class="pa-text">{rich(s_.get("details"))}</div>
+<div class="pa-grid" style="margin-top:4px;">
+  <div><div class="pa-label">Sample size</div><div class="pa-text">{rich(s_.get("sample_size"))}</div></div>
+  <div><div class="pa-label">Where to recruit</div><div class="pa-text">{rich(s_.get("where_to_recruit"))}</div></div>
+  <div><div class="pa-label">You'll end up with</div><div class="pa-text">{rich(s_.get("deliverable"))}</div></div>
+</div>
+<div class="pa-label">Decision rule</div><div class="pa-text">{rich(s_.get("decision_rule"))}</div>
+</div>''')
+        parts = default_kit(s_.get("method"))
+        if st.button(f"Write materials for step {i}: {', '.join(parts).lower()}", key=f"kitbtn_{i}"):
             with st.spinner("Writing your research materials... about 30 seconds."):
                 try:
-                    st.session_state["kit"] = {"step": labels[idx], "text": generate_kit(result, plan[idx], parts)}
+                    st.session_state["kits"][i] = generate_kit(result, s_, parts)
                 except Exception as e:
                     st.error(f"Request failed: {e}")
-        kit = st.session_state.get("kit")
-        if kit:
-            with st.container(border=True):
-                st.caption(kit["step"])
-                st.markdown(kit["text"])
-            st.download_button("Download test kit", kit["text"], file_name="test_kit.md", mime="text/markdown")
+        if i in st.session_state["kits"]:
+            with st.expander(f"Materials for step {i}", expanded=True):
+                st.markdown(md_safe(st.session_state["kits"][i]))
+                st.download_button("Download materials", st.session_state["kits"][i],
+                                   file_name=f"step_{i}_materials.md", mime="text/markdown", key=f"kitdl_{i}")
+        st.write("")
 
-    st.divider()
-    with st.expander("📐 A/B test calculator: do I have enough visitors?"):
-        st.write("Before splitting landing page traffic into version A and B, check whether your traffic "
-                 "is enough to see a real difference.")
-        a1, a2, a3 = st.columns(3)
-        base = a1.number_input("Version A conversion (%)", 0.1, 99.0, 5.0, 0.5)
-        target = a2.number_input("Version B conversion you hope for (%)", 0.1, 99.0, 8.0, 0.5)
-        traffic = a3.number_input("Visitors you can get in total", 10, 1_000_000, 500, 50)
-        n = ab_sample_size(base / 100, target / 100)
-        if n:
-            st.markdown(f"You need about **{n:,} visitors per version** ({2*n:,} in total) "
-                        "to detect this difference with 95% confidence and 80% power.")
-            if traffic >= 2 * n:
-                st.success("You have enough traffic to run this A/B test.")
-            else:
-                st.warning(f"You only have {traffic:,} visitors. Test one version first, or only A/B test "
-                           "a bigger change (for example, two very different prices).")
+    w = result.get("what_would_change_my_mind", {})
+    show('<div class="pa-grid">'
+         f'<div class="pa-card"><div style="font-weight:650;color:#1d9e75;">Results that would raise confidence</div>'
+         f'<div class="pa-text">{bullets(w.get("raise_confidence"))}</div></div>'
+         f'<div class="pa-card"><div style="font-weight:650;color:#c0392b;">Results that would lower confidence</div>'
+         f'<div class="pa-text">{bullets(w.get("lower_confidence"))}</div></div></div>')
+
+    st.markdown("#### Tested two versions? Find out which one won")
+    st.caption("For example, two landing pages with different prices. Enter how many people saw each version "
+               "and how many signed up. Works even with small numbers.")
+    with st.form("ab_form"):
+        f1, f2, f3, f4 = st.columns(4)
+        va = f1.number_input("Version A: visitors", 1, 1_000_000, 250)
+        ca = f2.number_input("Version A: sign-ups", 0, 1_000_000, 12)
+        vb = f3.number_input("Version B: visitors", 1, 1_000_000, 250)
+        cb = f4.number_input("Version B: sign-ups", 0, 1_000_000, 20)
+        go_ab = st.form_submit_button("Compare")
+    if go_ab:
+        if ca > va or cb > vb:
+            st.error("Sign-ups can't be more than visitors.")
         else:
-            st.info("Enter two different conversion rates.")
+            rng = np.random.default_rng(7)
+            sa = rng.beta(1 + ca, 1 + va - ca, 40000)
+            sb = rng.beta(1 + cb, 1 + vb - cb, 40000)
+            p_b = float((sb > sa).mean())
+            lo_a, hi_a = np.percentile(sa, [2.5, 97.5]) * 100
+            lo_b, hi_b = np.percentile(sb, [2.5, 97.5]) * 100
+            leader, p_lead = ("B", p_b) if p_b >= 0.5 else ("A", 1 - p_b)
+            if p_lead >= 0.95:
+                verdict, box = f"Version {leader} is very likely better. Go with {leader}.", st.success
+            elif p_lead >= 0.80:
+                verdict, box = f"Leaning toward version {leader}. Collect a bit more data before deciding.", st.warning
+            else:
+                verdict, box = "No clear winner yet. Keep testing, or test a bigger difference.", st.info
+            box(f"**{p_lead:.0%} chance version {leader} converts better.** {verdict}")
+            m1, m2 = st.columns(2)
+            m1.metric("Version A conversion", f"{ca / va:.1%}", help=f"Likely range {lo_a:.1f}%–{hi_a:.1f}%")
+            m2.metric("Version B conversion", f"{cb / vb:.1%}", help=f"Likely range {lo_b:.1f}%–{hi_b:.1f}%")
+            x = np.linspace(0.0005, min(0.9995, max(hi_a, hi_b) / 100 * 1.6), 400)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x * 100, y=beta_pdf(x, 1 + ca, 1 + va - ca), name="Version A",
+                                     fill="tozeroy", line=dict(color="#3b8bd4")))
+            fig.add_trace(go.Scatter(x=x * 100, y=beta_pdf(x, 1 + cb, 1 + vb - cb), name="Version B",
+                                     fill="tozeroy", line=dict(color="#f0a500")))
+            fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(showticklabels=False),
+                              xaxis=dict(title="Conversion rate (%)"), legend=dict(orientation="h"))
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Each curve shows where that version's true conversion rate probably sits. "
+                       "The less the curves overlap, the clearer the winner. Method: Bayesian A/B test with Beta posteriors.")
 
     if prev:
         with st.expander("Compare riskiest assumptions with your previous description"):
             pa, pb = st.columns(2)
-            with pa:
-                st.markdown("**Previous**")
-                for x in prev.get("riskiest_assumptions", []):
-                    st.write(f"- {x.get('assumption', '')}")
-            with pb:
-                st.markdown("**Now**")
-                for x in result.get("riskiest_assumptions", []):
-                    st.write(f"- {x.get('assumption', '')}")
+            pa.markdown("**Previous**\n\n" + "\n".join(f"- {md_safe(x.get('assumption', ''))}" for x in prev.get("riskiest_assumptions", [])))
+            pb.markdown("**Now**\n\n" + "\n".join(f"- {md_safe(x.get('assumption', ''))}" for x in result.get("riskiest_assumptions", [])))
 
-# ---------------- tab 3: competitors
-with tab3:
+# ---------------- competitors
+elif section == SECTIONS[2]:
     comps = result.get("competitors", [])
     if comps:
-        st.markdown("### Competitor comparison")
-        st.caption("Prices and features are typical estimates. Use the search link to check current details.")
-        df = pd.DataFrame([{
-            "Name": c.get("name", ""), "Type": c.get("type", ""), "Price": c.get("price", ""),
-            "Key features": c.get("key_features", ""), "Target user": c.get("target_user", ""),
-            "Strength": c.get("strength", ""), "Weakness": c.get("weakness", ""),
-            "Source": label_text(c.get("certainty")), "Look up": search_url(c.get("name", "")),
-        } for c in comps])
-        st.dataframe(df, hide_index=True, use_container_width=True,
-                     column_config={"Look up": st.column_config.LinkColumn("Look up", display_text="Search")})
-
-        axes = result.get("positioning_axes", {})
-        you = result.get("your_position", {})
+        st.markdown("#### Competitor comparison")
+        note("Prices and features come from the AI's general knowledge, not live data. Use Search to check current details.")
+        rows = "".join(
+            f"<tr><td><b>{rich(c.get('name'))}</b><div class='pa-muted'>{rich(c.get('type'))}</div></td>"
+            f"<td>{rich(c.get('price'))}</td><td>{rich(c.get('key_features'))}</td><td>{rich(c.get('target_user'))}</td>"
+            f"<td>{rich(c.get('strength'))}</td><td>{rich(c.get('weakness'))}</td>"
+            f"<td><a href='{search_url(c.get('name', ''))}' target='_blank'>Search</a></td></tr>" for c in comps)
+        show('<table class="pa-table"><tr><th style="width:14%">Product</th><th style="width:9%">Price</th>'
+             '<th style="width:20%">Key features</th><th style="width:15%">Target user</th>'
+             '<th style="width:17%">Strength</th><th style="width:17%">Weakness</th><th style="width:8%">Look up</th></tr>'
+             + rows + "</table>")
+        axes, you = result.get("positioning_axes", {}), result.get("your_position", {})
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=[to_num(c.get("x")) for c in comps], y=[to_num(c.get("y")) for c in comps],
-            mode="markers+text", text=[c.get("name", "") for c in comps], textposition="top center",
-            marker=dict(size=13, color="#3b8bd4"), name="Competitors"))
-        fig.add_trace(go.Scatter(
-            x=[to_num(you.get("x"))], y=[to_num(you.get("y"))], mode="markers+text",
-            text=["Your product"], textposition="top center",
-            marker=dict(size=18, color="#f0a500", symbol="star"), name="Your product"))
+        fig.add_trace(go.Scatter(x=[to_num(c.get("x")) for c in comps], y=[to_num(c.get("y")) for c in comps],
+                                 mode="markers+text", text=[c.get("name", "") for c in comps], textposition="top center",
+                                 marker=dict(size=13, color="#3b8bd4")))
+        fig.add_trace(go.Scatter(x=[to_num(you.get("x"))], y=[to_num(you.get("y"))], mode="markers+text",
+                                 text=["Your product"], textposition="top center",
+                                 marker=dict(size=18, color="#f0a500", symbol="star")))
         fig.add_hline(y=5, line_color="#ccc"); fig.add_vline(x=5, line_color="#ccc")
         fig.update_layout(height=520, margin=dict(l=20, r=20, t=30, b=20), showlegend=False,
                           xaxis=dict(title=axes.get("x_label", ""), range=[0, 10.5]),
                           yaxis=dict(title=axes.get("y_label", ""), range=[0, 10.5]))
-        st.markdown("### Positioning map")
-        st.caption("Positions are estimated by the model. Use it to spot open space, then confirm with users.")
+        st.write("")
+        st.markdown("#### Positioning map")
+        st.caption("Positions are the AI's estimate. Use it to spot open space, then confirm with users.")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No competitor data available.")
 
-# ---------------- tab 4: market
-with tab4:
+# ---------------- market
+elif section == SECTIONS[3]:
     m = result.get("market", {})
-    st.markdown("### Market Size Overview")
-    st.caption("No live market data is used. These are bottom-up estimates. Check the calculation and verify the inputs.")
+    st.markdown("#### Market Size Overview")
+    note("No live market data is used. These are bottom-up estimates: check the calculation and verify each input.")
     cols = st.columns(3)
     specs = [("TAM", "Total Addressable Market", "tam", "#1a6eb5"),
              ("SAM", "Serviceable Addressable Market", "sam", "#1d9e75"),
              ("SOM", "Serviceable Obtainable Market", "som", "#3b8bd4")]
     for col, (abbr, full, key, bg) in zip(cols, specs):
-        item = m.get(key, {})
-        if not isinstance(item, dict):
-            item = {"value": item}
+        item = m.get(key, {}) if isinstance(m.get(key), dict) else {"value": m.get(key)}
         with col:
-            st.markdown(f"""<div style="background:{bg};border-radius:16px;padding:28px 16px;text-align:center;color:white;">
+            show(f'''<div style="background:{bg};border-radius:16px;padding:26px 16px;text-align:center;color:white;">
 <div style="font-size:13px;font-weight:600;letter-spacing:1px;opacity:0.85;">{abbr}</div>
 <div style="font-size:11px;opacity:0.7;margin-bottom:8px;">{full}</div>
-<div style="font-size:28px;font-weight:700;">{esc(item.get("value", "N/A"))}</div></div>""", unsafe_allow_html=True)
-            if item.get("calculation"):
-                st.markdown(f"**How it's calculated:** {item.get('calculation')}")
-            if item.get("how_to_verify"):
-                st.caption(f"Verify: {item.get('how_to_verify')}")
-    st.markdown("### Key Market Trends")
-    legend()
-    st.markdown(claim_lines(m.get("trends", [])), unsafe_allow_html=True)
+<div style="font-size:28px;font-weight:700;">{rich(item.get("value", "N/A"))}</div></div>
+<div class="pa-label">How it's calculated</div><div class="pa-text">{rich(item.get("calculation", "—"))}</div>
+<div class="pa-label">How to verify</div><div class="pa-muted">{rich(item.get("how_to_verify", "—"))}</div>''')
+    st.write("")
+    st.markdown("#### Key Market Trends")
+    show(f'<div class="pa-text">{bullets(m.get("trends"))}</div>')
 
-# ---------------- tab 5: user pain
-with tab5:
+# ---------------- user pain
+elif section == SECTIONS[4]:
     p = result.get("user_pain_points", {})
-    legend()
-    st.markdown("**Jobs-to-be-done:**")
-    st.markdown(claim_lines(p.get("jtbd", [])), unsafe_allow_html=True)
-    st.markdown("**Frustrations with existing solutions:**")
-    st.markdown(claim_lines(p.get("frustrations", [])), unsafe_allow_html=True)
+    st.markdown("#### Jobs-to-be-done")
+    show(f'<div class="pa-card"><div class="pa-text">{bullets(p.get("jtbd"))}</div></div>')
+    pains = p.get("pains") or [{"pain": x} for x in p.get("frustrations", [])]
+    order = {"high": 0, "medium": 1, "low": 2}
+    pains = sorted(pains, key=lambda x: order.get(str(x.get("severity", "")).lower(), 3))
+    sev_color = {"high": "#c0392b", "medium": "#d9822b", "low": "#6b7280"}
 
-# ---------------- tab 6: business model
-with tab6:
+    def sev_badge(v):
+        c = sev_color.get(str(v).lower(), "#6b7280")
+        return f'<span class="pa-badge" style="background:{c};">{rich(v)}</span>' if v else ""
+
+    st.markdown("#### Pain points, most severe first")
+    rows = "".join(
+        f"<tr><td>{rich(x.get('pain'))}</td><td>{rich(x.get('who'))}</td><td>{rich(x.get('current_workaround'))}</td>"
+        f"<td>{rich(x.get('frequency'))}</td><td>{sev_badge(x.get('severity'))}</td>"
+        f"<td>{rich(x.get('addressed_by'))}</td><td>{rich(x.get('validate_in'))}</td></tr>" for x in pains)
+    show('<table class="pa-table"><tr><th style="width:24%">Pain</th><th style="width:13%">Who</th>'
+         '<th style="width:20%">How they cope today</th><th style="width:9%">How often</th>'
+         '<th style="width:8%">Severity</th><th style="width:16%">Addressed by</th><th style="width:10%">Confirm in</th></tr>'
+         + rows + "</table>")
+    note("These are hypotheses, not research findings. A frequent, severe pain with a clumsy workaround is the "
+         "strongest signal. Confirm the top two in your Step 1 interviews.")
+
+# ---------------- business model
+elif section == SECTIONS[5]:
     b = result.get("business_model", {})
-    st.markdown("### Business Model Canvas")
-    legend()
+    st.markdown("#### Business Model Canvas")
     cell_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#fff;height:100%;box-sizing:border-box;"
-    label_style = "font-size:11px;font-weight:600;color:#666;margin-bottom:6px;"
-    val_style = "font-size:12px;color:#222;line-height:1.5;overflow-wrap:break-word;word-break:break-word;"
+    label_style = "font-size:12px;font-weight:600;color:#666;margin-bottom:6px;"
+    val_style = "font-size:13px;color:#222;line-height:1.55;overflow-wrap:break-word;"
     bot_style = "border:0.5px solid #ddd;border-radius:8px;padding:12px;background:#f8f8f8;box-sizing:border-box;"
 
     def cell(icon, label, key, style=cell_style):
         v = b.get(key, [])
-        if isinstance(v, str):
-            v = [{"point": v}]
-        if isinstance(v, dict):
-            v = [{"point": v.get("text", ""), "certainty": v.get("certainty") or v.get("basis")}]
-        body = claim_lines(v, field="point") or "—"
+        v = [v] if isinstance(v, (str, dict)) else v
         return (f'<div style="{style}"><div style="{label_style}">{icon} {label}</div>'
-                f'<div style="{val_style}">{body}</div></div>')
+                f'<div style="{val_style}">{bullets(v) or "—"}</div></div>')
 
-    st.markdown(f"""
+    show(f"""
 <table style="width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;">
 <tr>
   <td rowspan="2" style="width:20%;vertical-align:top;">{cell("🔗","Key Partners","key_partners")}</td>
@@ -729,22 +786,86 @@ with tab6:
   <td></td>
   <td colspan="2" style="vertical-align:top;">{cell("💵","Revenue Streams","revenue_streams", bot_style)}</td>
 </tr>
-</table>
-""", unsafe_allow_html=True)
+</table>""")
+    cm = result.get("cost_model", {}) or {}
 
-    ue = result.get("unit_economics", {})
-    if ue:
-        st.markdown("### Unit economics (rough estimate)")
-        ue_rows = [("Price", "price"), ("Unit cost", "unit_cost"), ("Gross margin", "gross_margin"),
-                   ("Customer acquisition cost", "customer_acquisition_cost"), ("Payback", "payback")]
-        st.dataframe(pd.DataFrame([{"Metric": n, "Estimate": ue.get(k, "—")} for n, k in ue_rows]),
-                     hide_index=True, use_container_width=True)
-        if ue.get("note"):
-            st.caption(f"Biggest unknown: {ue.get('note')}")
+    def num(v, d=0.0):
+        try:
+            return float(str(v).replace("$", "").replace(",", ""))
+        except Exception:
+            return d
 
-# ---------------- tab 7: MRD / PRD
-with tab7:
-    st.markdown("### Write an MRD or PRD")
+    ptype = str(cm.get("product_type", "")).split("|")[0].strip().title() or "Connected"
+    st.write("")
+    st.markdown(f"#### Cost model and unit economics · {rich(ptype)} product")
+    note("The AI drafts rough numbers. Edit any cell or input below and every result updates. "
+         "Hardware products use a bill of materials (BOM); software uses monthly cost to serve each user; "
+         "connected products need both.")
+    i1, i2, i3, i4 = st.columns(4)
+    price = i1.number_input("One-time price (USD)", 0.0, 1e7, num(cm.get("price_per_unit")), 10.0, key=f"ue_price_{st.session_state['run_id']}")
+    sub = i2.number_input("Subscription per month (USD)", 0.0, 1e5, num(cm.get("subscription_price_per_month")), 1.0, key=f"ue_sub_{st.session_state['run_id']}")
+    cac = i3.number_input("Cost to acquire a customer (USD)", 0.0, 1e6, num(cm.get("customer_acquisition_cost")), 5.0, key=f"ue_cac_{st.session_state['run_id']}")
+    life = i4.number_input("Customer lifetime (months)", 1.0, 240.0, max(1.0, num(cm.get("expected_lifetime_months"), 24)), 1.0, key=f"ue_life_{st.session_state['run_id']}")
+
+    cogs, serve = 0.0, 0.0
+    bom = cm.get("bom") or []
+    if bom or ptype in ("Hardware", "Connected"):
+        st.markdown("**Bill of materials (per unit)**")
+        bom_df = pd.DataFrame([{"Component": r.get("component", ""), "Qty": num(r.get("qty"), 1),
+                                "Unit cost (USD)": num(r.get("unit_cost")), "Note": r.get("note", "")} for r in bom]
+                              or [{"Component": "", "Qty": 1.0, "Unit cost (USD)": 0.0, "Note": ""}])
+        bom_edit = st.data_editor(bom_df, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"bom_editor_{st.session_state['run_id']}")
+        bom_total = float((pd.to_numeric(bom_edit["Qty"], errors="coerce").fillna(0)
+                           * pd.to_numeric(bom_edit["Unit cost (USD)"], errors="coerce").fillna(0)).sum())
+        mfg = st.number_input("Assembly, packaging, and shipping per unit (USD)", 0.0, 1e6,
+                              num(cm.get("manufacturing_and_logistics_per_unit")), 5.0, key=f"ue_mfg_{st.session_state['run_id']}")
+        cogs = bom_total + mfg
+        st.caption(f"Components {bom_total:,.2f} + assembly and shipping {mfg:,.2f} = cost per unit {cogs:,.2f} USD")
+
+    serve_items = cm.get("cost_to_serve") or []
+    if serve_items or ptype in ("Software", "Connected"):
+        st.markdown("**Monthly cost to serve one user**")
+        sv_df = pd.DataFrame([{"Item": r.get("item", ""), "Monthly cost per user (USD)": num(r.get("monthly_cost_per_user")),
+                               "Note": r.get("note", "")} for r in serve_items]
+                             or [{"Item": "", "Monthly cost per user (USD)": 0.0, "Note": ""}])
+        sv_edit = st.data_editor(sv_df, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"serve_editor_{st.session_state['run_id']}")
+        serve = float(pd.to_numeric(sv_edit["Monthly cost per user (USD)"], errors="coerce").fillna(0).sum())
+
+    upfront = price - cogs
+    monthly = sub - serve
+    lifetime_profit = upfront + monthly * life
+    ratio = lifetime_profit / cac if cac > 0 else None
+    if cac <= upfront:
+        payback = "At purchase"
+    elif monthly > 0:
+        payback = f"{(cac - upfront) / monthly:.1f} months"
+    else:
+        payback = "Never"
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Cost per unit", f"{cogs:,.0f}" if cogs else "—")
+    m2.metric("Hardware margin", f"{upfront / price:.0%}" if price > 0 else "—")
+    m3.metric("Cost to serve / month", f"{serve:,.2f}" if serve else "—")
+    m4.metric("Lifetime profit per customer", f"{lifetime_profit:,.0f}")
+    m5.metric("Lifetime profit : CAC", f"{ratio:.1f} : 1" if ratio is not None else "—", help="Payback: " + payback)
+    st.caption(f"Payback on acquisition cost: {payback}. All amounts in USD.")
+
+    flags = []
+    if price > 0 and upfront / price < 0.4:
+        flags.append("Hardware margin is under 40%, a level many consumer hardware companies try to stay above.")
+    if ratio is not None and ratio < 3:
+        flags.append("Lifetime profit is less than 3x the cost to acquire a customer, a common minimum for a healthy business.")
+    if serve > 0 and sub == 0:
+        flags.append(f"You pay about {serve * life:,.0f} USD in running costs per customer over {life:.0f} months "
+                     "but earn nothing after the sale. Consider a subscription or lower ongoing costs.")
+    for f in flags:
+        st.warning(f)
+    if cm.get("biggest_unknown"):
+        note(f"Biggest unknown: {cm.get('biggest_unknown')}")
+
+# ---------------- MRD / PRD
+elif section == SECTIONS[6]:
+    st.markdown("#### Write an MRD or PRD")
     st.write("Turn this analysis into a first draft you can edit. "
              "Anything that depends on an untested assumption is marked (to validate).")
     dtype = st.radio("Document", ["MRD", "PRD"], horizontal=True,
@@ -766,8 +887,9 @@ with tab7:
         except Exception as e:
             st.error(f"Could not read the template: {e}")
     with st.expander("See the template structure"):
-        st.markdown(template)
-
+        show('<div class="pa-text">' + "".join(
+            f'<div style="margin:3px 0;">{rich(line.lstrip("# ").strip())}</div>'
+            for line in template.splitlines() if line.strip()) + "</div>")
     if st.button(f"Write {dtype} draft", type="primary"):
         with st.spinner(f"Writing your {dtype}... about 40-60 seconds."):
             try:
@@ -775,11 +897,10 @@ with tab7:
                     result, st.session_state["history"][-1]["idea"], dtype, template, test_results)}
             except Exception as e:
                 st.error(f"Request failed: {e}")
-
     doc = st.session_state.get("doc")
     if doc:
         with st.container(border=True):
-            st.markdown(doc["text"])
+            st.markdown(md_safe(doc["text"]))
         c1, c2, _ = st.columns([1.3, 1.3, 5])
         try:
             c1.download_button(f"Download {doc['type']} (Word)", markdown_to_docx(doc["text"]),
